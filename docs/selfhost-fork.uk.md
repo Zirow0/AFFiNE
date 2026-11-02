@@ -1,0 +1,215 @@
+# Форк AFFiNE: власний хостинг без AFFiNE Cloud
+
+Робочі нотатки форку. Мета: прибрати залежність від хмарного сервісу AFFiNE,
+зосередитися на self-hosted і зробити зручне підключення власних AI-провайдерів.
+
+Цільові платформи: **сервер**, **web** (+ мобільна web-версія, яку сервер
+роздає разом із web), **адмін-панель**, **desktop Linux x64**.
+
+## 1. Середовище
+
+Скрипт `scripts/selfhost-dev/setup.sh` готує все одним запуском. Його можна
+запускати й частинами: `deps`, `services`, `native`, `migrate`, `frontend`,
+`desktop`.
+
+| Що         | Версія / примітка              |
+| ---------- | ------------------------------ |
+| Node.js    | 22.x (`>=22.12 <23`)           |
+| Yarn       | 4.18 через corepack            |
+| Rust       | 1.97.1 (`rust-toolchain.toml`) |
+| PostgreSQL | 16 + розширення **pgvector**   |
+| Redis      | будь-який 7.x                  |
+
+Перевірено в цьому середовищі (4 CPU, 16 ГБ RAM):
+
+| Крок                   | Команда                                                                                            | Час    |
+| ---------------------- | -------------------------------------------------------------------------------------------------- | ------ |
+| Залежності             | `yarn install` (+ `node node_modules/electron/install.js`)                                         | ~2 хв  |
+| Server native (Rust)   | `yarn affine @affine/server-native build`                                                          | ~20 хв |
+| Frontend native (Rust) | `yarn affine @affine/native build`                                                                 | ~7 хв  |
+| Міграції БД            | `yarn prisma migrate deploy && yarn data-migration run` у `packages/backend/server`                | <1 хв  |
+| Admin                  | `BUILD_TYPE=stable yarn affine bundle -p @affine/admin`                                            | ~15 с  |
+| Web                    | `BUILD_TYPE=stable yarn affine bundle -p @affine/web`                                              | ~5 хв  |
+| Mobile web             | `BUILD_TYPE=stable yarn affine bundle -p @affine/mobile`                                           | ~5 хв  |
+| Desktop Linux          | `yarn affine @affine/electron build && … generate-assets && … package --platform=linux --arch=x64` | ~5 хв  |
+| Запуск сервера         | `cd packages/backend/server && yarn r ./src/index.ts` → http://localhost:3010                      |        |
+
+### Підводні камені
+
+1. **`yarn affine server init` зависає.** Він викликає `prisma migrate dev`,
+   а та чекає інтерактивного вводу. Використовуйте `prisma migrate deploy`.
+2. **Режим selfhosted задається файлом конфігурації.** Сервер вмикає його,
+   якщо знаходить `~/.affine/config/config.json` або
+   `packages/backend/server/config.json` з `"deployment": {"type": "selfhosted"}`.
+   Змінна `DEPLOYMENT_TYPE` у dev-режимі працює лише як резервний варіант
+   (`src/env.ts`).
+3. **`AFFINE_PRO_PUBLIC_KEY`.** Self-hosted сервер не стартує без публічного
+   ключа ліцензії, вбудованого в `@affine/server-native` під час компіляції
+   (`packages/backend/native/src/lib.rs`, `base/helpers/crypto.ts`). Для
+   розробки скрипт підставляє тестовий ключ із
+   `.github/workflows/build-test.yml`. **Це одне з перших місць, яке треба
+   переробити у форку** (див. розділ 2).
+4. **Серверу потрібні всі три фронтенди.** Сервер падає, якщо немає
+   `static/mobile/assets-manifest.json`. Каталог `packages/backend/server/static`
+   має містити web (корінь), `mobile/` і `admin/`.
+5. **Linux перегенеровує NAPI-обгортки.** Збірка `@affine/native` на Linux
+   переписує `packages/frontend/native/index.{js,d.ts}` без macOS-символів.
+   Ці зміни не можна комітити (скрипт сам їх відкочує).
+6. **Постійний приватний ключ для BYOK.** Коли BYOK увімкнено, сервер вимагає
+   стабільний `crypto.privateKey`, яким шифруються збережені ключі провайдерів.
+   Без нього отримаєте помилку
+   `stable crypto.privateKey is required when persistent BYOK is enabled`.
+   Ключ читається з `AFFINE_PRIVATE_KEY` або з `~/.affine/config/private.key`
+   (EC prime256v1, PKCS#8 PEM). Скрипт генерує його автоматично. Якщо ключ
+   загубити, збережені BYOK-ключі не розшифруються.
+7. **Інсталятори desktop.** AppImage, deb і flatpak (`electron make`) потребують
+   додаткових системних пакетів (`fakeroot`, `dpkg`, `flatpak-builder`).
+   `package` дає робочу розпаковану збірку без них.
+
+## 2. Ліцензія: що важливо знати
+
+- Усе під `packages/backend/**` і `packages/common/native` поширюється за
+  **AFFiNE Enterprise Edition License**. Код можна змінювати й запускати для
+  розробки й тестування. Для production потрібна підписка AFFiNE EE, а права на
+  модифікації залишаються за AFFiNE.
+- Решта коду (frontend, blocksuite, `packages/common/*` окрім `native`) має
+  ліцензію **MIT**.
+- Сторонні Rust-крейти `affine_core`, `llm_adapter` і `llm_runtime` мають
+  ліцензію **AGPL-3.0**.
+
+Перед production-розгортанням форка сервера варто окремо вирішити юридичне
+питання. Від цього залежить, чи можна взагалі змінювати серверну частину (зокрема
+перевірку ліцензії), чи краще обмежитися налаштуваннями.
+
+## 3. Хмара AFFiNE: де вона «зашита»
+
+### Сервер
+
+- `src/app.module.ts`: модулі підключаються умовно. Для selfhosted уже
+  вмикаються `SelfhostModule` і `WorkerModule`. `PaymentModule`,
+  `LicenseModule`, `CopilotModule`, `CaptchaModule`, `OAuthModule` і
+  `CalendarModule` підключаються завжди у flavor `graphql`; їх можна прибрати
+  через `useIf(() => !env.selfhosted, …)`.
+- `GCloudModule` вмикається лише при `DEPLOYMENT_PLATFORM=gcp`.
+- `plugins/payment` і `plugins/license` разом із Rust-частиною
+  (`native/src/runtime/backend_runtime/payment/**`, `license*.rs`) реалізують
+  Stripe і RevenueCat, плани Pro/Team/AI та ліцензію Self-Host Team.
+- Квоти й entitlements (`core/quota`, `native/.../entitlement`) прив'язані до
+  планів. Для selfhosted більшість лімітів уже знята, але логіка ліцензії
+  Team залишається.
+- `core/telemetry`: серверна телеметрія.
+
+### Frontend (web, desktop)
+
+- `packages/frontend/core/src/modules/cloud/constant.ts` (`BUILD_IN_SERVERS`):
+  для збірок `stable`, `beta`, `canary` і `internal` у desktop вбудований
+  сервер `affine-cloud` з адресами `app.affine.pro`, `insider.affine.pro`,
+  `affine.fail` і `apple.getaffineapp.com`. Для web у selfhosted-режимі
+  (`environment.isSelfHosted`, файл `selfhost.html`) сервер дорівнює
+  `location.origin`.
+- `modules/cloud/services/default-server.ts`: «глобальний сервер завжди
+  `affine-cloud`». Його використовують близько 21 файлу.
+- Там же `getOfficialTelemetryEndpoint`: телеметрію відправляють на сервери
+  AFFiNE.
+- `tools/utils/src/build-config.ts`: `changelogUrl`, `downloadUrl`,
+  `pricingUrl`, `discordUrl`, `requestLicenseUrl` і Sentry DSN.
+- `packages/frontend/track`: Sentry і аналітика.
+- Desktop: `apps/electron/src/main/updater/*` (автооновлення з GitHub
+  toeverything), `application-menu`, `protocol.ts`, `security/redirect-proxy.ts`.
+- UI з посиланнями на хмару й тарифи: `modules/paywall`, `desktop/dialogs/setting/general-setting/plans`,
+  `components/sign-in/*`, `app-sidebar/views/app-download-button`,
+  `open-in-app-card`, `share-footer`, `about`.
+
+### План відключення (пропозиція)
+
+1. Додати build-флаг (наприклад `BUILD_CONFIG.selfhostOnly` або окремий
+   `appBuildType`), за яким `BUILD_IN_SERVERS` для desktop не містить
+   `affine-cloud`, а адресу сервера задає користувач (є `add-selfhosted.tsx`)
+   або вона вшивається під час збирання.
+2. Переробити `DefaultServerService`, щоб він не залежав від id `affine-cloud`.
+3. Вимкнути телеметрію, Sentry і автооновлення від toeverything (або направити
+   на власні адреси).
+4. Сховати UI тарифів, оплати, «Download app» і посилань на affine.pro.
+5. На сервері не підключати `PaymentModule` і `LicenseModule` для selfhosted
+   і прибрати вимогу `AFFINE_PRO_PUBLIC_KEY` (з урахуванням розділу 2).
+
+## 4. AI-провайдери: як влаштовано зараз
+
+Більша частина логіки написана на Rust: `packages/backend/native/src/llm/**`
+плюс зовнішні крейти `llm_adapter` і `llm_runtime`. Node-шар
+(`packages/backend/server/src/plugins/copilot`) у цій частині тонкий.
+
+Є два механізми.
+
+**A. Керовані профілі сервера** (`copilot.providers.profiles` у config.json).
+
+- Типи: `openai`, `anthropic`, `anthropicVertex`, `gemini`, `geminiVertex`,
+  `fal`, `cloudflareWorkersAi` (`providers/types.ts`, `config.ts`).
+- Профіль має вигляд `{ id, type, config, models, priority, enabled, middleware }`.
+- **В адмін-панелі не редагується.** `admin/src/modules/settings/config.ts`
+  показує лише `copilot.enabled` і `byok.*`. Профілі можна задати тільки
+  вручну через JSON.
+
+**B. BYOK (власні ключі на рівні робочого простору).**
+
+- Сервер: `plugins/copilot/byok/*` (GraphQL `byokSettings`,
+  `createWorkspaceByokProfile`…). Rust: `native/src/llm/byok/*`.
+- UI: «Налаштування робочого простору → Integrations → AI BYOK»
+  (`core/src/desktop/dialogs/setting/workspace-setting/byok/*`).
+- Провайдери: `openai`, `anthropic`, `gemini`, `fal` (жорсткий список у
+  `ByokProvider` і `byok/catalog.rs`).
+- **OpenAI-сумісний endpoint** (`ByokEndpointKind.openai_compatible`, діалекти
+  `responses` і `chat_completions`) доступний **лише в selfhosted**, коли
+  `copilot.byok.allowCustomEndpoint = true`. Приватні адреси (localhost, LAN,
+  тобто Ollama, LM Studio чи vLLM у локальній мережі) додатково потребують
+  `allowPrivateEndpoint`.
+- Ключі зберігаються на сервері (зашифровано) або локально в браузері.
+- Доступ у selfhosted: дозволено будь-якому робочому простору з власником
+  (`affine_core::evaluate_byok_access`, гілка `SelfHosted`). Платний план не
+  потрібен.
+
+Мінімальний `config.json`, щоб AI запрацював через BYOK. Перевірено:
+`serverConfig.features` містить `Copilot`. Також потрібен `private.key`,
+див. підводний камінь 6.
+
+```json
+{
+  "deployment": { "type": "selfhosted" },
+  "copilot": {
+    "enabled": true,
+    "byok.enabled": true,
+    "byok.allowedProviders": ["openai", "anthropic", "gemini", "fal"],
+    "byok.allowCustomEndpoint": true,
+    "byok.allowPrivateEndpoint": true
+  }
+}
+```
+
+### Що незручно і що можна покращити
+
+1. **Немає налаштування на рівні інстансу.** Кожен робочий простір додає
+   ключі окремо. Варто мати «провайдер за замовчуванням для всього сервера»,
+   який задає адмін (по суті UI для керованих профілів A).
+2. **Адмін-панель не вміє редагувати `providers.profiles`.** Потрібна
+   сторінка: список провайдерів, додавання (тип, base URL, ключ, моделі),
+   перевірка з'єднання (у BYOK уже є `ByokProbeOperation`) і пріоритети.
+3. **OpenAI-сумісні провайдери не виділені окремо.** Зараз це прапорець
+   «custom endpoint» усередині OpenAI. Можна зробити окремі пресети (Ollama,
+   OpenRouter, DeepSeek, Mistral, LM Studio, vLLM, Azure OpenAI) з готовими
+   URL і діалектами.
+4. **Каталог моделей фіксований** і береться з `llm_adapter`. Для власних
+   endpoint моделі вводять вручну. Можна додати автоматичне отримання списку
+   моделей (`GET /v1/models`).
+5. **Призначення моделей на сценарії** (чат, embeddings, rerank, зображення,
+   транскрипція) зараз визначається capability-матчингом у Rust
+   (`llm/route/*`, `core/model_registry.rs`). Потрібен UI, де адмін явно
+   вибирає модель для кожного сценарію.
+6. **Embeddings і rerank** для пошуку по робочому простору (`workspace-indexer-embedding`)
+   потребують окремої моделі. Без неї AI-пошук по документах не працює.
+
+## 5. Наступні кроки
+
+1. Вирішити питання ліцензії серверної частини (розділ 2).
+2. Додати build-флаг «тільки self-host» і прибрати `affine-cloud` з desktop (розділ 3).
+3. Додати в адмін-панелі розділ «AI-провайдери» поверх `copilot.providers.profiles`
+   з пресетами OpenAI-сумісних сервісів і перевіркою з'єднання (розділ 4).
