@@ -261,7 +261,63 @@
   Gemini. Чи працюють embeddings через OpenAI-сумісний endpoint (наприклад
   `nomic-embed-text` в Ollama), ще не перевірено.
 
-## 6. Наступні кроки
+## 6. MCP-сервер робочого простору (перевірено на 0.27.4)
+
+AFFiNE має вбудований MCP-сервер, щоб зовнішні AI-клієнти (Claude Desktop,
+Claude Code, Cursor тощо) могли читати й шукати документи робочого простору.
+
+- **Реалізація:** `packages/backend/server/src/plugins/copilot/mcp/*`.
+  Працює лише на сервері, тож тільки для серверних (cloud/self-hosted)
+  робочих просторів. Для локальних просторів desktop MCP-сервера немає.
+- **Endpoint:** `POST /api/workspaces/<workspaceId>/mcp`. Це stateless
+  Streamable HTTP, JSON-RPC 2.0, до 20 повідомлень у пакеті. Протоколи
+  `2024-10-07` … `2025-11-25`. Методи: `initialize`, `ping`, `tools/list`,
+  `tools/call`.
+- **Доступ:** `Authorization: Bearer aff_mcp_v1.<id>.<secret>`. Токен
+  створюється в Workspace → Settings → Integrations → MCP Server → Create
+  credential і прив'язаний до одного простору. Можна вибрати строк дії
+  (30/90/365 днів), токен можна ротувати й відкликати. Діють права
+  користувача, який його створив. UI одразу дає готовий JSON для
+  `mcpServers`.
+- **Вимоги:** має бути ввімкнено AI (`copilot.enabled`), інакше endpoint
+  вимкнено.
+
+### Інструменти
+
+| Інструмент             | Аргументи                            | Що робить                                                                                     |
+| ---------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `read_document`        | `docId`                              | Markdown документа (з перевіркою прав `Doc.Read`)                                             |
+| `doc_search`           | `query`, `doc_ids?`, `limit?` (1–20) | Пошук фрагментів: ключовий (індексатор) + семантичний (embeddings), з `block_id` для переходу |
+| `create_document`      | `title`, `content` (markdown)        | Лише в режимі READ_WRITE                                                                      |
+| `update_document`      | `docId`, `content`                   | Оновлює тіло мінімальним диффом, лише READ_WRITE                                              |
+| `update_document_meta` | `docId`, `title`                     | Лише READ_WRITE                                                                               |
+
+Інструменти запису доступні лише в dev/canary (`AFFINE_ENV=dev`). На
+стабільному self-host можна створити тільки токен «Read only».
+
+### Що знадобилося, щоб пошук запрацював
+
+1. **Без індексатора `doc_search` завжди повертає `SEARCH_UNAVAILABLE`.**
+   Офіційний compose 0.27.4 вимикає індексатор
+   (`AFFINE_INDEXER_ENABLED=false`).
+2. **Вбудованого (`embedded`) індексатора в 0.27.4 ще немає** (з'явився в
+   0.27.5). Потрібен Manticore Search (`manticoresearch:9308`) або
+   Elasticsearch: окремий контейнер на ~0,9 ГБ.
+3. **Налаштування індексатора з `config.json` не застосовуються** (той самий
+   баг, що й для AI). Записати через адмін-панель або мутацію
+   `updateAppConfig` і перезапустити сервер.
+4. **Таблиця `block` у Manticore не створилася з першого разу** (ймовірно,
+   Manticore ще стартував). Її довелося створити вручну тим самим DDL, що й
+   у сервері. Після цього редагування документа запускає індексацію.
+5. **Семантичний пошук** (`retrieval_mode` з векторами) вимагає embeddings.
+   Без них відповідь має `degraded_reason: VECTOR_UNAVAILABLE`, і працює
+   лише ключовий пошук.
+
+Перевірено: `curl` (JSON-RPC) і офіційний `@modelcontextprotocol/sdk` 1.32.2
+(Streamable HTTP): `initialize`, `tools/list`, `doc_search`, `read_document`;
+без токена та після відкликання повертається 401.
+
+## 7. Наступні кроки
 
 1. Вирішити питання ліцензії серверної частини (розділ 2).
 2. Додати build-флаг «тільки self-host» і прибрати `affine-cloud` з desktop (розділ 3).
