@@ -162,3 +162,18 @@ describe('block-tagged markdown', () => {
     ).toBe('Right after intro');
   });
 });
+
+describe('html fallback', () => {
+  test('turns HTML content into real blocks', async () => {
+    const store = await createPage('Old');
+    await applyTaggedMarkdown(
+      store,
+      '<h1>Groceries</h1>\n<ul><li>milk</li><li>bread</li></ul>'
+    );
+    expect(flavours(store)).toEqual([
+      'affine:paragraph',
+      'affine:list',
+      'affine:list',
+    ]);
+  });
+});

@@ -344,7 +344,8 @@ const WRITE_TOOLS: LocalAiToolDefinition[] = [
       title: { type: 'string', description: 'Document title' },
       content: {
         type: 'string',
-        description: 'Markdown body (do not repeat the title as a heading)',
+        description:
+          'Markdown body, not HTML (do not repeat the title as a heading)',
       },
     },
     ['title', 'content']
@@ -385,8 +386,20 @@ const WRITE_TOOLS: LocalAiToolDefinition[] = [
   ),
 ];
 
+/**
+ * Small models often double-escape Markdown in tool arguments, sending the
+ * two characters `\n` instead of a newline. Undo that when the text has no
+ * real line breaks at all.
+ */
+export function markdownArg(value: unknown) {
+  const text = String(value ?? '');
+  if (text.includes('\n') || !/\\[nt]/.test(text)) return text;
+  return text.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+}
+
 const DOC_EDITING_GUIDE = `# Working with documents
 - Documents are AFFiNE pages. doc_read and the context show them as block-tagged Markdown; the markers are only addresses for editing — never show them to the user.
+- Document content you write must be Markdown (e.g. "# Heading", "- item", "- [ ] task"), never HTML.
 - To change a document use doc_update (full new body with markers kept), doc_append (add content), doc_create (new doc) or doc_update_meta (rename). Only edit when the user asked you to change or create something; otherwise answer in chat.
 - After editing, briefly tell the user what you changed.
 - Images appear as ![caption](affine-image:<blob id>); call doc_view_images with those blob ids to see them.`;
@@ -828,23 +841,20 @@ export class LocalCopilotBackend {
           if (!content.createDoc) throw new Error('Editing is unavailable');
           const created = await content.createDoc(
             String(args.title ?? 'Untitled'),
-            String(args.content ?? '')
+            markdownArg(args.content)
           );
           return { success: true, ...created };
         }
         case 'doc_update': {
           if (!content.editDoc) throw new Error('Editing is unavailable');
-          const stats = await content.editDoc(
-            docId,
-            String(args.content ?? '')
-          );
+          const stats = await content.editDoc(docId, markdownArg(args.content));
           return stats ? { success: true, docId, ...stats } : notFound;
         }
         case 'doc_append': {
           if (!content.appendToDoc) throw new Error('Editing is unavailable');
           const appended = await content.appendToDoc(
             docId,
-            String(args.content ?? ''),
+            markdownArg(args.content),
             args.after_block_id ? String(args.after_block_id) : undefined
           );
           return appended ? { success: true, docId, ...appended } : notFound;

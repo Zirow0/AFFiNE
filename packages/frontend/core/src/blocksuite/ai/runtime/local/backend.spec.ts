@@ -435,3 +435,14 @@ describe('local (server-less) AI backend', () => {
     );
   });
 });
+
+describe('markdownArg', () => {
+  test('unescapes double-escaped newlines only when there are no real ones', async () => {
+    const { markdownArg } = await import('./backend');
+    expect(markdownArg('Hello!\\n\\n- Milk\\n- Bread')).toBe(
+      'Hello!\n\n- Milk\n- Bread'
+    );
+    expect(markdownArg('Code `a\\nb`\nnext')).toBe('Code `a\\nb`\nnext');
+    expect(markdownArg(undefined)).toBe('');
+  });
+});

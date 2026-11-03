@@ -1,5 +1,7 @@
 import {
+  defaultImageProxyMiddleware,
   embedSyncedDocMiddleware,
+  HtmlAdapter,
   MarkdownAdapter,
   titleMiddleware,
 } from '@blocksuite/affine/shared/adapters';
@@ -145,17 +147,53 @@ export type DocEditStats = {
   unchanged: number;
 };
 
+/** Models sometimes answer with HTML although Markdown was requested. */
+export function looksLikeHtml(content: string) {
+  return /^\s*<(h[1-6]|p|ul|ol|li|div|table|blockquote|pre|section|article)\b/i.test(
+    content
+  );
+}
+
+async function insertHtml(
+  store: Store,
+  note: BlockModel,
+  html: string,
+  index: number
+) {
+  const transformer = store.getTransformer([defaultImageProxyMiddleware]);
+  const adapter = new HtmlAdapter(transformer, store.provider);
+  const snapshot = await adapter.toSliceSnapshot({
+    file: html,
+    assets: transformer.assetsManager,
+    workspaceId: store.workspace.id,
+    pageId: store.id,
+  });
+  const blocks = snapshot?.content.flatMap(block => block.children) ?? [];
+  let inserted = 0;
+  for (const block of blocks) {
+    const model = await transformer.snapshotToBlock(
+      block,
+      store,
+      note.id,
+      index + inserted
+    );
+    if (model) inserted++;
+  }
+  return inserted;
+}
+
 async function insertAt(
   store: Store,
   note: BlockModel,
-  markdown: string,
+  content: string,
   index: number,
   id?: string
 ) {
-  if (!markdown.trim()) return 0;
+  if (!content.trim()) return 0;
+  if (looksLikeHtml(content)) return insertHtml(store, note, content, index);
   const models = await insertFromMarkdown(
     undefined,
-    markdown,
+    content,
     store,
     note.id,
     index,
