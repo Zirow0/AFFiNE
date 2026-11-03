@@ -182,7 +182,11 @@ export const WorkspaceSideEffects = () => {
       useLocalAI
         ? createLocalAIRequestService(
             currentWorkspace.id,
-            createLocalWorkspaceContent(docsService, docsSearchService)
+            createLocalWorkspaceContent(
+              docsService,
+              docsSearchService,
+              blobId => currentWorkspace.engine.blob.get(blobId)
+            )
           )
         : createAIRequestService(
             graphqlService.gql,
@@ -203,6 +207,7 @@ export const WorkspaceSideEffects = () => {
       dispose();
     };
   }, [
+    currentWorkspace.engine.blob,
     currentWorkspace.engine.doc,
     currentWorkspace.id,
     currentWorkspace.flavour,

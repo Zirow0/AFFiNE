@@ -4,6 +4,11 @@ import type { BlockModel, Store } from '@blocksuite/affine/store';
 import { firstValueFrom, timeout } from 'rxjs';
 
 import type { LocalWorkspaceContent } from './backend';
+import {
+  appendMarkdown,
+  applyTaggedMarkdown,
+  exportTaggedMarkdown,
+} from './doc-tools';
 
 /**
  * Plain Markdown serialization of a doc's blocks. Deliberately simple and
@@ -92,10 +97,65 @@ export function storeToMarkdown(store: Store) {
     .trim();
 }
 
+/** Downscales an image to at most 1024px and returns a JPEG/PNG data URL. */
+async function imageToDataUrl(data: Uint8Array, mime?: string) {
+  const blob = new Blob([data as BlobPart], { type: mime || 'image/png' });
+  try {
+    const bitmap = await createImageBitmap(blob);
+    const scale = Math.min(1, 1024 / Math.max(bitmap.width, bitmap.height));
+    const canvas = new OffscreenCanvas(
+      Math.max(1, Math.round(bitmap.width * scale)),
+      Math.max(1, Math.round(bitmap.height * scale))
+    );
+    canvas
+      .getContext('2d')
+      ?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const out = await canvas.convertToBlob({
+      type: 'image/jpeg',
+      quality: 0.85,
+    });
+    return await blobToDataUrl(out);
+  } catch {
+    // e.g. SVG: send as-is
+    return await blobToDataUrl(blob);
+  }
+}
+
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
 export function createLocalWorkspaceContent(
   docsService: DocsService,
-  docsSearchService: DocsSearchService
+  docsSearchService: DocsSearchService,
+  getBlob?: (
+    blobId: string
+  ) => Promise<{ data: Uint8Array; mime?: string } | null | undefined>
 ): LocalWorkspaceContent {
+  /** opens a live (non-trashed) doc, loaded and ready to edit */
+  const withDoc = async <T>(
+    docId: string,
+    fn: (doc: ReturnType<DocsService['open']>['doc']) => Promise<T>
+  ): Promise<T | null> => {
+    const record = docsService.list.doc$(docId).value;
+    if (!record || record.trash$.value) return null;
+    const { doc, release } = docsService.open(docId);
+    try {
+      const disposePriority = doc.addPriorityLoad(10);
+      await doc.waitForSyncReady();
+      disposePriority();
+      return await fn(doc);
+    } finally {
+      release();
+    }
+  };
+
   return {
     async searchDocs(query, limit = 10) {
       if (!query.trim()) return [];
@@ -117,21 +177,45 @@ export function createLocalWorkspaceContent(
         }));
     },
     async readDoc(docId) {
-      const record = docsService.list.doc$(docId).value;
-      if (!record || record.trash$.value) return null;
-      const { doc, release } = docsService.open(docId);
-      try {
-        const disposePriority = doc.addPriorityLoad(10);
-        await doc.waitForSyncReady();
-        disposePriority();
+      return withDoc(docId, async doc => {
+        const store = doc.blockSuiteDoc;
+        const exported = await exportTaggedMarkdown(store).catch(() => null);
         return {
           docId,
           title: doc.title$.value || 'Untitled',
-          markdown: storeToMarkdown(doc.blockSuiteDoc),
+          markdown: exported?.markdown || storeToMarkdown(store),
+          images: exported?.images ?? [],
         };
-      } finally {
-        release();
-      }
+      });
+    },
+    async createDoc(title, markdown) {
+      const record = docsService.createDoc({ title, primaryMode: 'page' });
+      const inserted = await withDoc(record.id, doc =>
+        appendMarkdown(doc.blockSuiteDoc, markdown)
+      );
+      return { docId: record.id, title, blocks: inserted ?? 0 };
+    },
+    async editDoc(docId, markdown) {
+      return withDoc(docId, doc =>
+        applyTaggedMarkdown(doc.blockSuiteDoc, markdown)
+      );
+    },
+    async appendToDoc(docId, markdown, afterBlockId) {
+      const inserted = await withDoc(docId, doc =>
+        appendMarkdown(doc.blockSuiteDoc, markdown, afterBlockId)
+      );
+      return inserted === null ? null : { inserted };
+    },
+    async renameDoc(docId, title) {
+      const record = docsService.list.doc$(docId).value;
+      if (!record || record.trash$.value) return false;
+      await docsService.changeDocTitle(docId, title);
+      return true;
+    },
+    async getImage(blobId) {
+      const record = await getBlob?.(blobId);
+      if (!record) return null;
+      return imageToDataUrl(record.data, record.mime);
     },
   };
 }

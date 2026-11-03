@@ -83,7 +83,10 @@ Object.defineProperty(globalThis, 'EventSource', {
 
 const WORKSPACE = 'ws1';
 
-function ollamaKey(features: string[] = ['tool_calling']) {
+function ollamaKey(
+  features: string[] = ['tool_calling'],
+  input: string[] = ['text']
+) {
   return {
     id: 'k1',
     provider: 'openai',
@@ -103,7 +106,7 @@ function ollamaKey(features: string[] = ['tool_calling']) {
           enabled: true,
           capabilities: [
             {
-              input: ['text'],
+              input,
               output: ['text', 'structured'],
               features,
               attachmentKinds: [],
@@ -296,5 +299,139 @@ describe('local (server-less) AI backend', () => {
     );
     const session = await service.getSession(WORKSPACE, sessionId);
     expect(session?.messages.map(m => m.content)).toEqual(['Q', 'second']);
+  });
+
+  test('shows workspace images to a vision model', async () => {
+    electron.state.keys = [ollamaKey(['tool_calling'], ['text', 'image'])];
+    electron.state.scripts.push(
+      [
+        {
+          type: 'tool-calls',
+          toolCalls: [
+            {
+              id: 'v1',
+              type: 'function',
+              function: {
+                name: 'doc_view_images',
+                arguments: '{"blob_ids":["img1","missing"]}',
+              },
+            },
+          ],
+        },
+        { type: 'done' },
+      ],
+      [{ type: 'text-delta', textDelta: 'A red square.' }, { type: 'done' }]
+    );
+    const getImage = vi.fn(async (id: string) =>
+      id === 'img1' ? 'data:image/jpeg;base64,AAAA' : null
+    );
+    const service = createLocalAIRequestService(WORKSPACE, {
+      searchDocs: async () => [],
+      readDoc: async () => null,
+      getImage,
+    });
+    const sessionId = await service.createSession({
+      workspaceId: WORKSPACE,
+      promptName: 'Chat With AFFiNE AI',
+    } as BlockSuitePresets.AICreateSessionOptions);
+    const chunks = await collect(
+      (await service.executeAction('chat', {
+        workspaceId: WORKSPACE,
+        sessionId,
+        input: 'What is on the image?',
+        stream: true,
+      } as any)) as AsyncIterable<string>
+    );
+    const objects = chunks.map(chunk => JSON.parse(chunk));
+    expect(objects[1].result).toEqual({
+      shown: ['img1'],
+      missing: ['missing'],
+    });
+    expect(
+      electron.state.requests[0].tools.map((t: any) => t.function.name)
+    ).toContain('doc_view_images');
+    const followUp = electron.state.requests[1].messages.at(-1);
+    expect(followUp.role).toBe('user');
+    expect(followUp.content[1]).toEqual({
+      type: 'image_url',
+      image_url: { url: 'data:image/jpeg;base64,AAAA' },
+    });
+  });
+
+  test('creates and edits documents through write tools', async () => {
+    electron.state.scripts.push(
+      [
+        {
+          type: 'tool-calls',
+          toolCalls: [
+            {
+              id: 'w1',
+              type: 'function',
+              function: {
+                name: 'doc_create',
+                arguments: '{"title":"Plan","content":"- step"}',
+              },
+            },
+            {
+              id: 'w2',
+              type: 'function',
+              function: {
+                name: 'doc_update',
+                arguments: '{"doc_id":"d1","content":"New body"}',
+              },
+            },
+          ],
+        },
+        { type: 'done' },
+      ],
+      [{ type: 'text-delta', textDelta: 'Done.' }, { type: 'done' }]
+    );
+    const createDoc = vi.fn(async () => ({
+      docId: 'new1',
+      title: 'Plan',
+      blocks: 1,
+    }));
+    const editDoc = vi.fn(async () => ({
+      inserted: 1,
+      updated: 0,
+      deleted: 2,
+      unchanged: 0,
+    }));
+    const service = createLocalAIRequestService(WORKSPACE, {
+      searchDocs: async () => [],
+      readDoc: async () => null,
+      createDoc,
+      editDoc,
+    });
+    const sessionId = await service.createSession({
+      workspaceId: WORKSPACE,
+      promptName: 'Chat With AFFiNE AI',
+    } as BlockSuitePresets.AICreateSessionOptions);
+    const chunks = await collect(
+      (await service.executeAction('chat', {
+        workspaceId: WORKSPACE,
+        sessionId,
+        input: 'Make a plan and clean up d1',
+        stream: true,
+      } as any)) as AsyncIterable<string>
+    );
+    const results = chunks
+      .map(chunk => JSON.parse(chunk))
+      .filter(o => o.type === 'tool-result');
+    expect(createDoc).toHaveBeenCalledWith('Plan', '- step');
+    expect(editDoc).toHaveBeenCalledWith('d1', 'New body');
+    expect(results[0].result).toMatchObject({ success: true, docId: 'new1' });
+    expect(results[1].result).toMatchObject({ success: true, deleted: 2 });
+    const toolNames = electron.state.requests[0].tools.map(
+      (t: any) => t.function.name
+    );
+    expect(toolNames).toEqual(
+      expect.arrayContaining(['doc_create', 'doc_update', 'doc_append'])
+    );
+    // a model without vision is not offered the image tool
+    expect(toolNames).not.toContain('doc_view_images');
+    expect(electron.state.requests[0].messages[0].content).toContain(
+      '# Working with documents'
+    );
   });
 });

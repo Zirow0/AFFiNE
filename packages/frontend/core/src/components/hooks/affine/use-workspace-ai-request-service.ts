@@ -37,7 +37,9 @@ export function useWorkspaceAIRequestService(): AIRequestService {
     if (isOnDeviceAIWorkspace(workspace)) {
       return createLocalAIRequestService(
         workspace.id,
-        createLocalWorkspaceContent(docsService, docsSearchService)
+        createLocalWorkspaceContent(docsService, docsSearchService, blobId =>
+          workspace.engine.blob.get(blobId)
+        )
       );
     }
     return createAIRequestService(

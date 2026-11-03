@@ -32,9 +32,34 @@ export interface LocalWorkspaceContent {
     query: string,
     limit?: number
   ): Promise<{ docId: string; title: string; excerpt?: string }[]>;
-  readDoc(
-    docId: string
-  ): Promise<{ docId: string; title: string; markdown: string } | null>;
+  /** Markdown of a page; block-tagged when the doc can be edited */
+  readDoc(docId: string): Promise<{
+    docId: string;
+    title: string;
+    markdown: string;
+    images?: { blockId: string; blobId: string; caption: string }[];
+  } | null>;
+  createDoc?(
+    title: string,
+    markdown: string
+  ): Promise<{ docId: string; title: string; blocks: number }>;
+  editDoc?(
+    docId: string,
+    markdown: string
+  ): Promise<{
+    inserted: number;
+    updated: number;
+    deleted: number;
+    unchanged: number;
+  } | null>;
+  appendToDoc?(
+    docId: string,
+    markdown: string,
+    afterBlockId?: string
+  ): Promise<{ inserted: number } | null>;
+  renameDoc?(docId: string, title: string): Promise<boolean>;
+  /** a downscaled data URL of a workspace image blob */
+  getImage?(blobId: string): Promise<string | null>;
 }
 
 const MAX_DOC_CHARS = 24_000;
@@ -269,38 +294,102 @@ function userContent(
   ];
 }
 
-const DOC_TOOLS: LocalAiToolDefinition[] = [
-  {
-    type: 'function',
-    function: {
-      name: 'doc_keyword_search',
-      description:
-        'Search the documents of the current workspace by keywords. Returns matching document ids, titles and excerpts.',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: 'Keywords to search for' },
-        },
-        required: ['query'],
-      },
-    },
+const fn = (
+  name: string,
+  description: string,
+  properties: Record<string, unknown>,
+  required: string[]
+): LocalAiToolDefinition => ({
+  type: 'function',
+  function: {
+    name,
+    description,
+    parameters: { type: 'object', properties, required },
   },
-  {
-    type: 'function',
-    function: {
-      name: 'doc_read',
-      description:
-        'Read the full content of a document in the current workspace as Markdown.',
-      parameters: {
-        type: 'object',
-        properties: {
-          doc_id: { type: 'string', description: 'The document id' },
-        },
-        required: ['doc_id'],
-      },
-    },
-  },
+});
+
+const READ_TOOLS: LocalAiToolDefinition[] = [
+  fn(
+    'doc_keyword_search',
+    'Search the documents of the current workspace by keywords. Returns matching document ids, titles and excerpts.',
+    { query: { type: 'string', description: 'Keywords to search for' } },
+    ['query']
+  ),
+  fn(
+    'doc_read',
+    'Read a document of the current workspace as block-tagged Markdown (each top-level block is preceded by <!-- block_id=... flavour=... -->). Also lists the images it contains.',
+    { doc_id: { type: 'string', description: 'The document id' } },
+    ['doc_id']
+  ),
 ];
+
+const IMAGE_TOOL = fn(
+  'doc_view_images',
+  'Look at images stored in the workspace (for example images listed by doc_read). The images are shown to you right after this call.',
+  {
+    blob_ids: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Image blob ids (at most 4)',
+    },
+  },
+  ['blob_ids']
+);
+
+const WRITE_TOOLS: LocalAiToolDefinition[] = [
+  fn(
+    'doc_create',
+    'Create a new page document with a title and Markdown body. Supports headings, paragraphs with bold/italic/strikethrough/inline code/links, bulleted/numbered/todo lists (nested), quotes, code blocks with language, tables, dividers and LaTeX ($$...$$). Returns the new doc id.',
+    {
+      title: { type: 'string', description: 'Document title' },
+      content: {
+        type: 'string',
+        description: 'Markdown body (do not repeat the title as a heading)',
+      },
+    },
+    ['title', 'content']
+  ),
+  fn(
+    'doc_update',
+    'Edit a document body. Pass the COMPLETE new body as block-tagged Markdown: keep the <!-- block_id=... --> marker (unchanged) above every block you keep, edit the Markdown under a marker to change that block, add new blocks without a marker (or with block_id=new), and omit blocks to delete them. Blocks you do not touch are preserved exactly. Images cannot be created or changed, only kept, moved or removed. Without any markers the whole body is replaced.',
+    {
+      doc_id: { type: 'string', description: 'The document id' },
+      content: {
+        type: 'string',
+        description: 'The complete new body as block-tagged Markdown',
+      },
+    },
+    ['doc_id', 'content']
+  ),
+  fn(
+    'doc_append',
+    'Insert Markdown blocks into a document without rewriting it: at the end, or right after the block with after_block_id.',
+    {
+      doc_id: { type: 'string', description: 'The document id' },
+      content: { type: 'string', description: 'Markdown to insert' },
+      after_block_id: {
+        type: 'string',
+        description: 'Optional block id to insert after',
+      },
+    },
+    ['doc_id', 'content']
+  ),
+  fn(
+    'doc_update_meta',
+    'Rename a document (change its title).',
+    {
+      doc_id: { type: 'string', description: 'The document id' },
+      title: { type: 'string', description: 'The new title' },
+    },
+    ['doc_id', 'title']
+  ),
+];
+
+const DOC_EDITING_GUIDE = `# Working with documents
+- Documents are AFFiNE pages. doc_read and the context show them as block-tagged Markdown; the markers are only addresses for editing — never show them to the user.
+- To change a document use doc_update (full new body with markers kept), doc_append (add content), doc_create (new doc) or doc_update_meta (rename). Only edit when the user asked you to change or create something; otherwise answer in chat.
+- After editing, briefly tell the user what you changed.
+- Images appear as ![caption](affine-image:<blob id>); call doc_view_images with those blob ids to see them.`;
 
 type GqlResult = Record<string, unknown>;
 
@@ -563,14 +652,16 @@ export class LocalCopilotBackend {
     const useTools = isChat && !!this.content;
     const model = await resolveChatModel(this.workspaceId, {
       tools: useTools,
-      vision: hasImages,
+      // prefer a vision model for chat so it can look at document images
+      vision: hasImages || useTools,
     });
 
     const messages = isChat
       ? await this.buildChatMessages(session, model)
       : this.buildActionMessages(session, model);
     const prompt = isChat ? null : getLocalPrompt(session.promptName);
-    const tools = useTools && model.supportsTools ? DOC_TOOLS : undefined;
+    const tools =
+      useTools && model.supportsTools ? this.toolsFor(model) : undefined;
 
     const objects: StreamObject[] = [];
     const emit = (object: StreamObject) => {
@@ -609,6 +700,7 @@ export class LocalCopilotBackend {
           content: text || null,
           tool_calls: toolCalls,
         });
+        const viewedImages: string[] = [];
         for (const call of toolCalls) {
           let args: Record<string, any> = {};
           try {
@@ -622,7 +714,12 @@ export class LocalCopilotBackend {
             toolName: call.function.name,
             args,
           });
-          const result = await this.runTool(call.function.name, args);
+          const result = await this.runTool(
+            call.function.name,
+            args,
+            model,
+            viewedImages
+          );
           emit({
             type: 'tool-result',
             toolCallId: call.id,
@@ -634,6 +731,21 @@ export class LocalCopilotBackend {
             role: 'tool',
             tool_call_id: call.id,
             content: truncate(JSON.stringify(result)),
+          });
+        }
+        if (viewedImages.length) {
+          messages.push({
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: 'Images requested with doc_view_images:',
+              },
+              ...viewedImages.map(url => ({
+                type: 'image_url' as const,
+                image_url: { url },
+              })),
+            ],
           });
         }
       }
@@ -652,15 +764,33 @@ export class LocalCopilotBackend {
     }
   }
 
-  private async runTool(name: string, args: Record<string, any>) {
+  private toolsFor(model: ResolvedLocalModel) {
+    const content = this.content;
+    if (!content) return undefined;
+    const tools = [...READ_TOOLS];
+    if (model.supportsVision && content.getImage) tools.push(IMAGE_TOOL);
+    if (content.editDoc) tools.push(...WRITE_TOOLS);
+    return tools;
+  }
+
+  private async runTool(
+    name: string,
+    args: Record<string, any>,
+    model?: ResolvedLocalModel,
+    viewedImages: string[] = []
+  ) {
+    const notFound = {
+      type: 'error',
+      name: 'Not found',
+      message: 'Document not found',
+    };
     try {
-      if (!this.content) throw new Error('Workspace access is unavailable');
+      const content = this.content;
+      if (!content) throw new Error('Workspace access is unavailable');
+      const docId = String(args.doc_id ?? '');
       switch (name) {
         case 'doc_keyword_search': {
-          const hits = await this.content.searchDocs(
-            String(args.query ?? ''),
-            10
-          );
+          const hits = await content.searchDocs(String(args.query ?? ''), 10);
           return hits.map(hit => ({
             docId: hit.docId,
             title: hit.title,
@@ -668,14 +798,61 @@ export class LocalCopilotBackend {
           }));
         }
         case 'doc_read': {
-          const doc = await this.content.readDoc(String(args.doc_id ?? ''));
-          if (!doc)
+          const doc = await content.readDoc(docId);
+          if (!doc) return notFound;
+          return { ...doc, markdown: truncate(doc.markdown) };
+        }
+        case 'doc_view_images': {
+          if (!model?.supportsVision || !content.getImage) {
             return {
               type: 'error',
-              name: 'Not found',
-              message: 'Document not found',
+              name: 'No vision',
+              message:
+                'The current model cannot view images. Enable "Image understanding" for a vision-capable model.',
             };
-          return { ...doc, markdown: truncate(doc.markdown) };
+          }
+          const ids = (Array.isArray(args.blob_ids) ? args.blob_ids : [])
+            .map(String)
+            .slice(0, 4);
+          const shown: string[] = [];
+          for (const id of ids) {
+            const url = await content.getImage(id).catch(() => null);
+            if (url) {
+              viewedImages.push(url);
+              shown.push(id);
+            }
+          }
+          return { shown, missing: ids.filter(id => !shown.includes(id)) };
+        }
+        case 'doc_create': {
+          if (!content.createDoc) throw new Error('Editing is unavailable');
+          const created = await content.createDoc(
+            String(args.title ?? 'Untitled'),
+            String(args.content ?? '')
+          );
+          return { success: true, ...created };
+        }
+        case 'doc_update': {
+          if (!content.editDoc) throw new Error('Editing is unavailable');
+          const stats = await content.editDoc(
+            docId,
+            String(args.content ?? '')
+          );
+          return stats ? { success: true, docId, ...stats } : notFound;
+        }
+        case 'doc_append': {
+          if (!content.appendToDoc) throw new Error('Editing is unavailable');
+          const appended = await content.appendToDoc(
+            docId,
+            String(args.content ?? ''),
+            args.after_block_id ? String(args.after_block_id) : undefined
+          );
+          return appended ? { success: true, docId, ...appended } : notFound;
+        }
+        case 'doc_update_meta': {
+          if (!content.renameDoc) throw new Error('Editing is unavailable');
+          const ok = await content.renameDoc(docId, String(args.title ?? ''));
+          return ok ? { success: true, docId } : notFound;
         }
         default:
           return {
@@ -753,6 +930,7 @@ export class LocalCopilotBackend {
 
     const system = [
       chatSystemPrompt(),
+      this.content?.editDoc && model.supportsTools ? DOC_EDITING_GUIDE : '',
       context.length ? `# Context\n\n${context.join('\n\n')}` : '',
     ]
       .filter(Boolean)
