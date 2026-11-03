@@ -18,6 +18,8 @@
   writableTmpDirAsHomeHook,
   cargo,
   rustc,
+  cmake,
+  pkg-config,
   findutils,
   zip,
   jq,
@@ -120,6 +122,10 @@ stdenv.mkDerivation (finalAttrs: {
     nodejs
     cargo
     rustc
+    # opus-codec builds libopus with CMake and generates bindings via bindgen
+    cmake
+    pkg-config
+    rustPlatform.bindgenHook
     findutils
     zip
     jq
@@ -127,6 +133,9 @@ stdenv.mkDerivation (finalAttrs: {
     copyDesktopItems
     makeWrapper
   ];
+
+  # cmake is only a tool for a Rust build script here
+  dontUseCmakeConfigure = true;
 
   env = {
     CI = "1";
