@@ -158,6 +158,12 @@ stdenv.mkDerivation (finalAttrs: {
   configurePhase = ''
     runHook preConfigure
 
+    # opus-codec's build script links `$OUT_DIR/lib`, but GNUInstallDirs
+    # installs to `lib64` outside Debian-like systems; pin it via a toolchain
+    # file, which the `cmake` crate picks up from the environment.
+    echo 'set(CMAKE_INSTALL_LIBDIR "lib" CACHE PATH "" FORCE)' > $TMPDIR/cmake-toolchain.cmake
+    export CMAKE_TOOLCHAIN_FILE=$TMPDIR/cmake-toolchain.cmake
+
     # cargo: use the vendored crates
     mkdir -p .cargo
     cat $cargoDeps/.cargo/config.toml >> .cargo/config.toml
