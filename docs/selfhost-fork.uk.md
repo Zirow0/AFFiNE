@@ -207,7 +207,61 @@
 6. **Embeddings і rerank** для пошуку по робочому простору (`workspace-indexer-embedding`)
    потребують окремої моделі. Без неї AI-пошук по документах не працює.
 
-## 5. Наступні кроки
+## 5. Перевірка офіційних збірок без інтернету (0.27.4)
+
+Стенд:
+
+- **Сервер:** офіційний образ `ghcr.io/toeverything/affine:stable` (0.27.4) з
+  `.docker/selfhost/compose.yml`. Усі контейнери (AFFiNE, Postgres, Redis,
+  Ollama) підключені до Docker-мережі `internal: true`, тож виходу в інтернет
+  немає. Сервер у логах: `getaddrinfo EAI_AGAIN affine.pro`.
+- **Провайдер:** Ollama (`qwen2.5:0.5b`) у тій самій мережі,
+  `http://172.30.0.20:11434/v1`.
+- **Клієнти:** web із сервера та офіційний desktop
+  `affine-0.27.4-stable-linux-x64.zip`.
+
+Результат: AI-чат відповідає через Ollama і в web, і в desktop.
+
+Робочий порядок налаштування:
+
+1. `config.json`: `copilot.enabled`, `copilot.byok.enabled`,
+   `allowCustomEndpoint` і `allowPrivateEndpoint` = `true`.
+2. **Адмін-панель → Settings → AI BYOK: перемкнути кожен із чотирьох перемикачів
+   (вимкнути, зберегти, увімкнути, зберегти).** У 0.27.4 значення з
+   `config.json` видно в адмін-панелі та в `appConfig`, але Rust-runtime
+   їх не застосовує. Поки значення не збережені через адмін-панель, маємо
+   `customEndpointMode: disabled` і помилку чату `copilot_disabled`. Ключі
+   через крапку чи вкладені — однаково.
+3. Workspace → Settings → Integrations → AI BYOK → Add key: провайдер
+   **OpenAI**, Storage **Server**, будь-який API key, увімкнути «Use a custom
+   API-compatible endpoint», Endpoint `http://<ollama>:11434/v1`, dialect
+   **Chat Completions API**, Add model: ID `qwen2.5:0.5b`, позначити
+   **Chat & writing + Actions + Structured output**. Далі Test connection
+   (має бути «Connection verified») і Connect.
+   - Якщо позначити лише «Chat & writing», чат падає з `no_compatible_target`:
+     він вимагає виклику інструментів (Actions).
+4. BYOK працює лише в **серверних** робочих просторах. Локальний простір
+   спершу треба перенести на сервер або створити новий.
+
+Інші спостереження:
+
+- **Desktop:** після входу на self-hosted сервер меню робочих просторів
+  показує сервер, але не показує список його просторів. Сам простір при цьому
+  синхронізується і відкривається за прямим посиланням. Потрібно перевірити
+  на реальному ПК.
+- **Desktop без мережі** постійно звертається до `app.affine.pro`
+  (вбудований сервер AFFiNE Cloud). На роботу це не впливає, це лише помилки
+  в логах.
+- **Сервер** без мережі намагається отримати список релізів з `affine.pro`:
+  помилка в логах, на роботу не впливає.
+- **Видалення всіх ключів** («Clear all BYOK keys») вимагає ввести текст
+  підтвердження.
+- **Покриття функцій:** за даними екрана BYOK, транскрипція та індексація
+  робочого простору (embeddings) працюють лише з серверним ключем
+  Gemini. Чи працюють embeddings через OpenAI-сумісний endpoint (наприклад
+  `nomic-embed-text` в Ollama), ще не перевірено.
+
+## 6. Наступні кроки
 
 1. Вирішити питання ліцензії серверної частини (розділ 2).
 2. Додати build-флаг «тільки self-host» і прибрати `affine-cloud` з desktop (розділ 3).
