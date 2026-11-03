@@ -54,7 +54,7 @@
             inherit src version;
             # update after changing Cargo.lock / yarn.lock (see nix/affine-desktop.nix)
             cargoHash = "sha256-iXcJ/3CfYHinbUrNJmpv0zaFp2u+ifgH17TB0HoGl5g=";
-            yarnHash = lib.fakeHash;
+            yarnHash = "sha256-QxNj7UYpdgZNWh6NLBhPDDTyS+BUj2mxDqqIEqQZq3A=";
           }
           // args
         );
