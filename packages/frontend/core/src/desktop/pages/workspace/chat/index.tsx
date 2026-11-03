@@ -1,7 +1,6 @@
 import { observeResize, useConfirmModal } from '@affine/component';
 import {
   AIChatRuntime,
-  createAIRequestService,
   useAIChatElement,
   useAIChatRuntime,
   WorkspaceAIChatSessionStrategy,
@@ -17,21 +16,16 @@ import { NotificationServiceImpl } from '@affine/core/blocksuite/view-extensions
 import { useAIChatConfig } from '@affine/core/components/hooks/affine/use-ai-chat-config';
 import { useAISpecs } from '@affine/core/components/hooks/affine/use-ai-specs';
 import { useAISubscribe } from '@affine/core/components/hooks/affine/use-ai-subscribe';
+import { useWorkspaceAIRequestService } from '@affine/core/components/hooks/affine/use-workspace-ai-request-service';
 import {
   AIDraftService,
   AIModelService,
   AIToolsConfigService,
 } from '@affine/core/modules/ai-button';
-import {
-  EventSourceService,
-  GraphQLService,
-  ServerService,
-  SubscriptionService,
-} from '@affine/core/modules/cloud';
+import { ServerService, SubscriptionService } from '@affine/core/modules/cloud';
 import { WorkspaceDialogService } from '@affine/core/modules/dialogs';
 import { FeatureFlagService } from '@affine/core/modules/feature-flag';
 import { PeekViewService } from '@affine/core/modules/peek-view';
-import { NbstoreService } from '@affine/core/modules/storage';
 import { AppThemeService } from '@affine/core/modules/theme';
 import {
   ViewBody,
@@ -52,30 +46,6 @@ import { nanoid } from 'nanoid';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import * as styles from './index.css';
-
-function useAIRequestService() {
-  const graphqlService = useService(GraphQLService);
-  const eventSourceService = useService(EventSourceService);
-  const nbstoreService = useService(NbstoreService);
-  const workspace = useService(WorkspaceService).workspace;
-
-  return useMemo(
-    () =>
-      createAIRequestService(
-        graphqlService.gql,
-        eventSourceService.eventSource,
-        nbstoreService.realtime,
-        async docIds => {
-          await Promise.all(
-            [workspace.id, 'db$docProperties', ...docIds].map(docId =>
-              workspace.engine.doc.waitForSynced(docId)
-            )
-          );
-        }
-      ),
-    [graphqlService, eventSourceService, nbstoreService, workspace]
-  );
-}
 
 function createMockStd(workspace: Workspace) {
   workspace.meta.initialize();
@@ -108,7 +78,7 @@ export const Component = () => {
   const chatToolContainerRef = useRef<HTMLDivElement>(null);
   const chatTabsContainerRef = useRef<HTMLDivElement | null>(null);
   const widthSignalRef = useRef<Signal<number>>(signal(0));
-  const requestService = useAIRequestService();
+  const requestService = useWorkspaceAIRequestService();
   const workbench = useService(WorkbenchService).workbench;
 
   const workspaceId = useService(WorkspaceService).workspace.id;

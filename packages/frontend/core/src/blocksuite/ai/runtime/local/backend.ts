@@ -319,7 +319,7 @@ export class LocalCopilotBackend {
     readonly workspaceId: string,
     private readonly content?: LocalWorkspaceContent
   ) {
-    this.store = new LocalSessionStore(workspaceId);
+    this.store = LocalSessionStore.for(workspaceId);
   }
 
   // ---- GraphQL emulation --------------------------------------------------

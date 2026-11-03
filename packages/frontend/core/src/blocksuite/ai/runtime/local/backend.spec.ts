@@ -74,6 +74,7 @@ vi.mock('@affine/electron-api', () => ({
 }));
 
 const { createLocalAIRequestService } = await import('./index');
+const { LocalSessionStore } = await import('./session-store');
 
 Object.defineProperty(globalThis, 'EventSource', {
   configurable: true,
@@ -129,6 +130,7 @@ const textOf = (chunks: string[]) =>
     .join('');
 
 beforeEach(() => {
+  LocalSessionStore.resetAll();
   electron.state.files.clear();
   electron.state.requests = [];
   electron.state.scripts = [];
@@ -163,6 +165,7 @@ describe('local (server-less) AI backend', () => {
     expect(request.messages.at(-1)).toEqual({ role: 'user', content: 'Hi!' });
 
     // a fresh service instance reads the persisted history back
+    LocalSessionStore.resetAll();
     const reloaded = createLocalAIRequestService(WORKSPACE);
     const sessions = await reloaded.getSessions(WORKSPACE);
     expect(sessions).toHaveLength(1);

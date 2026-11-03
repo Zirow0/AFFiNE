@@ -243,6 +243,7 @@ export const localAiHandlers = {
       ...(request.temperature !== undefined
         ? { temperature: request.temperature }
         : {}),
+      ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
       ...(request.jsonMode ? { response_format: { type: 'json_object' } } : {}),
     });
     const message = json?.choices?.[0]?.message ?? {};

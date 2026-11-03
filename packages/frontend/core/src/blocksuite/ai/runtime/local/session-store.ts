@@ -41,11 +41,32 @@ type StoredData = { version: 1; sessions: LocalChatSession[] };
 /** keep the file bounded: drop the oldest unpinned action sessions */
 const MAX_ACTION_SESSIONS = 200;
 
+const stores = new Map<string, LocalSessionStore>();
+
 export class LocalSessionStore {
   private sessions: LocalChatSession[] | null = null;
   private loading: Promise<LocalChatSession[]> | null = null;
 
-  constructor(readonly workspaceId: string) {}
+  /**
+   * Several AI request services (chat page, doc sidebar, inline actions) may
+   * exist for the same workspace; they share one in-memory store so their
+   * writes do not overwrite each other.
+   */
+  static for(workspaceId: string) {
+    let store = stores.get(workspaceId);
+    if (!store) {
+      store = new LocalSessionStore(workspaceId);
+      stores.set(workspaceId, store);
+    }
+    return store;
+  }
+
+  /** test helper */
+  static resetAll() {
+    stores.clear();
+  }
+
+  private constructor(readonly workspaceId: string) {}
 
   private async load() {
     if (this.sessions) return this.sessions;
