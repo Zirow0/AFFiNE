@@ -6,8 +6,10 @@ import {
 import {
   AIAppEvents,
   createAIRequestService,
+  createLocalAIRequestService,
   setupAIProvider,
 } from '@affine/core/blocksuite/ai';
+import { createLocalWorkspaceContent } from '@affine/core/blocksuite/ai/runtime/local/workspace-content';
 import { useRegisterFindInPageCommands } from '@affine/core/components/hooks/affine/use-register-find-in-page-commands';
 import { useRegisterWorkspaceCommands } from '@affine/core/components/hooks/use-register-workspace-commands';
 import { OverCapacityNotification } from '@affine/core/components/over-capacity';
@@ -22,6 +24,7 @@ import {
   WorkspaceDialogService,
 } from '@affine/core/modules/dialogs';
 import { DocsService } from '@affine/core/modules/doc';
+import { DocsSearchService } from '@affine/core/modules/docs-search';
 import { EditorSettingService } from '@affine/core/modules/editor-setting';
 import { useRegisterNavigationCommands } from '@affine/core/modules/navigation/view/use-register-navigation-commands';
 import { QuickSearchContainer } from '@affine/core/modules/quicksearch';
@@ -144,6 +147,7 @@ export const WorkspaceSideEffects = () => {
   const eventSourceService = useService(EventSourceService);
   const authService = useService(AuthService);
   const nbstoreService = useService(NbstoreService);
+  const docsSearchService = useService(DocsSearchService);
   const realtimeConnectionError = useLiveData(
     useService(RealtimeService).connectionError$
   );
@@ -170,19 +174,28 @@ export const WorkspaceSideEffects = () => {
   }, [realtimeConnectionError, t]);
 
   useEffect(() => {
+    // Local workspaces in the desktop app have no server: run AI on-device,
+    // talking directly to the providers configured on this computer.
+    const useLocalAI =
+      BUILD_CONFIG.isElectron && currentWorkspace.flavour === 'local';
     const dispose = setupAIProvider(
-      createAIRequestService(
-        graphqlService.gql,
-        eventSourceService.eventSource,
-        nbstoreService.realtime,
-        async docIds => {
-          await Promise.all(
-            [currentWorkspace.id, 'db$docProperties', ...docIds].map(docId =>
-              currentWorkspace.engine.doc.waitForSynced(docId)
-            )
-          );
-        }
-      ),
+      useLocalAI
+        ? createLocalAIRequestService(
+            currentWorkspace.id,
+            createLocalWorkspaceContent(docsService, docsSearchService)
+          )
+        : createAIRequestService(
+            graphqlService.gql,
+            eventSourceService.eventSource,
+            nbstoreService.realtime,
+            async docIds => {
+              await Promise.all(
+                [currentWorkspace.id, 'db$docProperties', ...docIds].map(
+                  docId => currentWorkspace.engine.doc.waitForSynced(docId)
+                )
+              );
+            }
+          ),
       globalDialogService,
       authService
     );
@@ -192,6 +205,9 @@ export const WorkspaceSideEffects = () => {
   }, [
     currentWorkspace.engine.doc,
     currentWorkspace.id,
+    currentWorkspace.flavour,
+    docsService,
+    docsSearchService,
     eventSourceService,
     nbstoreService,
     graphqlService,

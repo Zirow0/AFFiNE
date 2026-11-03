@@ -35,7 +35,12 @@ export const IntegrationSetting = ({
   const serverFeatures = useLiveData(serverService.server.features$);
   const info = useWorkspaceInfo(workspaceService.workspace);
   const isCloudWorkspace = workspaceService.workspace.flavour !== 'local';
-  const showByok = isCloudWorkspace && !!(info?.isOwner || info?.isAdmin);
+  // local workspaces in the desktop app use on-device AI providers
+  const isOfflineDesktopWorkspace =
+    BUILD_CONFIG.isElectron && !isCloudWorkspace;
+  const showByok =
+    isOfflineDesktopWorkspace ||
+    (isCloudWorkspace && !!(info?.isOwner || info?.isAdmin));
 
   const integrationList = useMemo(
     () =>

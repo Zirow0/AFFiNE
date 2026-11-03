@@ -18,7 +18,8 @@
     "./shared/import": "./src/shared/import.ts",
     "./main/shared-state-schema": "./src/main/shared-state-schema.ts",
     "./main/updater/event": "./src/main/updater/event.ts",
-    "./main/windows-manager": "./src/main/windows-manager/index.ts"
+    "./main/windows-manager": "./src/main/windows-manager/index.ts",
+    "./main/local-ai/types": "./src/main/local-ai/types.ts"
   },
   "scripts": {
     "start": "electron .",

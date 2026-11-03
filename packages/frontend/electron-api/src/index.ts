@@ -51,6 +51,15 @@ export const sharedStorage = (globalThis as any).__sharedStorage as
   | undefined;
 
 export type { AppInfo, SharedStorage };
+export type {
+  LocalAiChatRequest,
+  LocalAiContentPart,
+  LocalAiEndpoint,
+  LocalAiMessage,
+  LocalAiStreamEvent,
+  LocalAiToolCall,
+  LocalAiToolDefinition,
+} from '@affine/electron/main/local-ai/types';
 export {
   type SpellCheckStateSchema,
   type TabViewsMetaSchema,

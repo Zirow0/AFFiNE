@@ -6,6 +6,8 @@ import {
 import { WorkspaceServerService } from '@affine/core/modules/cloud';
 import { WorkspaceService } from '@affine/core/modules/workspace';
 import {
+  ByokCustomEndpointMode,
+  ByokProvider,
   deleteWorkspaceByokProfileMutation,
   type GraphQLQuery,
   probeWorkspaceByokProfileMutation,
@@ -21,6 +23,7 @@ import { CoveragePanel } from './coverage';
 import { logByokError } from './errors';
 import * as styles from './index.css';
 import { KeyList } from './key-list';
+import { localByokGql } from './local-gql';
 import {
   clearLocalKeys,
   deleteLocalKey,
@@ -38,6 +41,9 @@ export const WorkspaceByokSetting = () => {
   const t = useI18n();
   const workspace = useService(WorkspaceService).workspace;
   const workspaceServer = useService(WorkspaceServerService);
+  // Local workspaces in the desktop app run AI on-device: provider keys are
+  // stored on this computer and there is no server-side policy to consult.
+  const offline = BUILD_CONFIG.isElectron && workspace.flavour === 'local';
   const [settings, setSettings] = useState<ByokSettings | null>(null);
   const [usage, setUsage] = useState<ByokUsagePoint[]>([]);
   const [localKeys, setLocalKeys] = useState<ByokKey[]>([]);
@@ -50,6 +56,34 @@ export const WorkspaceByokSetting = () => {
   } | null>(null);
 
   const load = useCallback(async () => {
+    if (offline) {
+      const [localStorageSupported, nextLocalKeys] = await Promise.all([
+        localByokStorageSupported(),
+        readLocalKeys(workspace.id),
+      ]);
+      setSettings({
+        workspaceId: workspace.id,
+        entitled: true,
+        serverEntitled: false,
+        localEntitled: true,
+        policy: {
+          enabled: true,
+          allowedProviders: [
+            ByokProvider.openai,
+            ByokProvider.anthropic,
+            ByokProvider.gemini,
+          ],
+          customEndpointMode: ByokCustomEndpointMode.enabled,
+          privateEndpointSupported: true,
+        },
+        catalog: { version: 'local', providers: [] },
+        keys: [],
+        localStorageSupported,
+      } as ByokSettings);
+      setUsage([]);
+      setLocalKeys(nextLocalKeys);
+      return;
+    }
     if (!workspaceServer.server) {
       return;
     }
@@ -94,7 +128,7 @@ export const WorkspaceByokSetting = () => {
     });
     setUsage(data.workspace.byokUsage);
     setLocalKeys(nextLocalKeys);
-  }, [workspace.id, workspaceServer.server]);
+  }, [offline, workspace.id, workspaceServer.server]);
 
   useEffect(() => {
     load().catch(error => {
@@ -398,7 +432,11 @@ export const WorkspaceByokSetting = () => {
         localStorageSupported={settings.localStorageSupported}
         canAddServerKey={canAddServerKey}
         canAddLocalKey={canAddLocalKey}
-        gql={workspaceServer.server?.gql as GqlFn | undefined}
+        gql={
+          offline
+            ? localByokGql
+            : (workspaceServer.server?.gql as GqlFn | undefined)
+        }
       />
     </>
   );

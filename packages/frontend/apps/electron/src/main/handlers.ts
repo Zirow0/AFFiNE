@@ -8,6 +8,7 @@ import { clipboardHandlers } from './clipboard';
 import { configStorageHandlers } from './config-storage';
 import { findInPageHandlers } from './find-in-page';
 import { importHandlers } from './import';
+import { localAiHandlers } from './local-ai';
 import { getLogFilePath, logger, revealLogFile } from './logger';
 import { recordingHandlers } from './recording';
 import { checkSource } from './security-restrictions';
@@ -47,6 +48,7 @@ export const allHandlers = {
   popup: popupHandlers,
   i18n: i18nHandlers,
   byokStorage: byokStorageHandlers,
+  localAi: localAiHandlers,
   auth: authHandlers,
 };
 

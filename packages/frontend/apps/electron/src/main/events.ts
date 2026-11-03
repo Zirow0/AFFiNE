@@ -6,6 +6,7 @@ import {
 } from '../shared/type';
 import { applicationMenuEvents } from './application-menu';
 import { beforeAppQuit } from './cleanup';
+import { localAiEvents } from './local-ai';
 import { logger } from './logger';
 import { powerEvents } from './power';
 import { recordingEvents } from './recording';
@@ -23,6 +24,7 @@ export const allEvents = {
   recording: recordingEvents,
   popup: popupEvents,
   power: powerEvents,
+  localAi: localAiEvents,
 };
 
 const subscriptions = new Map<number, Set<string>>();
