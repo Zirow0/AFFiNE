@@ -207,3 +207,74 @@ describe('links between documents', () => {
     expect(markdown).toContain('affine://doc/target-doc?blockIds=b1');
   });
 });
+
+describe('toggle lists and callouts', () => {
+  test('toggle lists round-trip through the ▸ marker', async () => {
+    const store = await createPage('Intro');
+    await appendMarkdown(
+      store,
+      [
+        '- ▸ Details',
+        '  - hidden one',
+        '- [>] Legacy marker',
+        '- plain item',
+      ].join('\n')
+    );
+    const lists = note(store).children.filter(c => c.flavour === 'affine:list');
+    expect(
+      lists.map(l => [
+        (l.props as { type: string }).type,
+        (l.props as { text: Text }).text.toString(),
+      ])
+    ).toEqual([
+      ['toggle', 'Details'],
+      ['toggle', 'Legacy marker'],
+      ['bulleted', 'plain item'],
+    ]);
+    expect(lists[0].children).toHaveLength(1);
+
+    const { markdown } = await exportTaggedMarkdown(store);
+    expect(markdown).toContain('▸ Details');
+    // re-applying the exported markdown changes nothing
+    const stats = await applyTaggedMarkdown(store, markdown);
+    expect(stats.updated + stats.inserted + stats.deleted).toBe(0);
+    expect((lists[0].props as { type: string }).type).toBe('toggle');
+  });
+
+  test('callouts accept emoji and GitHub-style markers', async () => {
+    const store = await createPage('Intro');
+    await appendMarkdown(
+      store,
+      [
+        '> [!💡] Remember this',
+        '',
+        '> [!⚠️]',
+        '> Careful',
+        '',
+        '> [!WARNING] Danger zone',
+        '',
+        '> just a quote',
+      ].join('\n')
+    );
+    const blocks = note(store).children.slice(1);
+    expect(
+      blocks.map(b => [
+        b.flavour,
+        (b.props as { emoji?: string }).emoji ??
+          (b.props as { type?: string }).type,
+      ])
+    ).toEqual([
+      ['affine:callout', '💡'],
+      ['affine:callout', '⚠'],
+      ['affine:callout', '🚧'],
+      ['affine:paragraph', 'quote'],
+    ]);
+    const firstText = (blocks[0].children[0].props as { text: Text }).text;
+    expect(firstText.toString()).toBe('Remember this');
+    const stats = await applyTaggedMarkdown(
+      store,
+      (await exportTaggedMarkdown(store)).markdown
+    );
+    expect(stats.updated + stats.inserted + stats.deleted).toBe(0);
+  });
+});

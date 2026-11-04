@@ -7,6 +7,7 @@ import {
 } from '@blocksuite/affine/shared/adapters';
 import {
   type BlockModel,
+  type BlockSnapshot,
   Slice,
   type Store,
   type TransformerMiddleware,
@@ -36,6 +37,77 @@ export const DOC_LINK_BASE = 'affine://doc';
 const docLinkMiddleware: TransformerMiddleware = ({ adapterConfigs }) => {
   adapterConfigs.set('docLinkBaseUrl', DOC_LINK_BASE);
 };
+
+/**
+ * Toggle lists have no Markdown syntax; they are written as list items whose
+ * text starts with "▸ " (also accepted on input: "[>] ").
+ */
+export const TOGGLE_MARKER = '▸ ';
+const TOGGLE_INPUT_RE = /^(?:▸|\\?\[>\])\s*/;
+
+type SnapshotText = { delta?: { insert?: unknown }[] };
+
+function walkSnapshot(block: BlockSnapshot, fn: (b: BlockSnapshot) => void) {
+  fn(block);
+  block.children?.forEach(child => walkSnapshot(child, fn));
+}
+
+/** before export: toggle list → bulleted list with the toggle marker */
+function markToggles(block: BlockSnapshot) {
+  walkSnapshot(block, b => {
+    const props = b.props as { type?: string; text?: SnapshotText };
+    if (b.flavour === 'affine:list' && props.type === 'toggle') {
+      props.type = 'bulleted';
+      props.text?.delta?.unshift({ insert: TOGGLE_MARKER });
+    }
+  });
+}
+
+/** after import: list items starting with the toggle marker become toggles */
+function restoreToggles(block: BlockSnapshot) {
+  walkSnapshot(block, b => {
+    const props = b.props as { type?: string; text?: SnapshotText };
+    const first = props.text?.delta?.[0];
+    if (
+      b.flavour === 'affine:list' &&
+      first &&
+      typeof first.insert === 'string' &&
+      TOGGLE_INPUT_RE.test(first.insert)
+    ) {
+      props.type = 'toggle';
+      first.insert = first.insert.replace(TOGGLE_INPUT_RE, '');
+      if (!first.insert) props.text?.delta?.shift();
+    }
+  });
+}
+
+const ADMONITION_EMOJI: Record<string, string> = {
+  note: '💡',
+  info: '💡',
+  tip: '💡',
+  important: '📌',
+  warning: '🚧',
+  caution: '🚨',
+  danger: '🚨',
+};
+
+/**
+ * Callouts are written as `> [!💡] text`. The importer only accepts a single
+ * code point emoji, so drop emoji variation selectors and map GitHub-style
+ * `[!NOTE]` admonitions to an emoji.
+ */
+export function normalizeCalloutMarkdown(markdown: string) {
+  return markdown.replace(
+    /^(\s*>\s*)\\?\[!([^\]\n]*)\]/gm,
+    (_, prefix: string, inner: string) => {
+      const word = inner.trim().toLowerCase();
+      const emoji =
+        ADMONITION_EMOJI[word] ??
+        (Array.from(inner.replace(/\uFE0F/g, '').trim())[0] || '💡');
+      return `${prefix}[!${emoji}]`;
+    }
+  );
+}
 
 export type LocalDocImage = {
   blockId: string;
@@ -116,6 +188,7 @@ async function blockToMarkdown(store: Store, model: BlockModel) {
     Slice.fromModels(store, [model])
   );
   if (!snapshot) return '';
+  snapshot.content.forEach(markToggles);
   const adapter = new MarkdownAdapter(transformer, store.provider);
   const result = await adapter.fromSliceSnapshot({
     snapshot,
@@ -215,12 +288,13 @@ async function insertAt(
   ]);
   const adapter = new MarkdownAdapter(transformer, store.provider);
   const snapshot = await adapter.toSliceSnapshot({
-    file: content,
+    file: normalizeCalloutMarkdown(content),
     assets: transformer.assetsManager,
     workspaceId: store.workspace.id,
     pageId: store.id,
   });
   const blocks = snapshot?.content.flatMap(block => block.children) ?? [];
+  blocks.forEach(restoreToggles);
   let inserted = 0;
   for (const block of blocks) {
     // keep the id of an edited block when it stays a single block
