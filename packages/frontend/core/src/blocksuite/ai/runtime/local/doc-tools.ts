@@ -144,7 +144,9 @@ export class DocLinkError extends Error {
  * Check the targets of `affine://doc/<id>` links before writing. Small models
  * often put a title (`affine://doc/Getting-Started`) or a placeholder
  * (`<that id>`) where the id belongs: when the "id" or the link text names
- * exactly one document, the link is pointed at it. Anything else is refused,
+ * exactly one document, the link is pointed at it; so is a link whose text is
+ * exactly another document's title but whose id names some other document.
+ * Anything else is refused,
  * so the model can look the id up instead of leaving a broken link.
  *
  * @param docs the live (non-trashed) documents of the workspace
@@ -184,7 +186,22 @@ export function resolveDocLinks(
       } catch {
         // keep the raw id
       }
-      if (ids.has(id)) return whole;
+      if (ids.has(id)) {
+        // Small models sometimes reuse the id they have at hand (often the
+        // document being edited). When the link text is exactly the title of
+        // another document, that document is what was meant.
+        const named = text ? byTitle(text) : null;
+        const current = docs.find(doc => doc.id === id);
+        if (
+          named &&
+          named !== id &&
+          inLink !== undefined &&
+          titleKey(current?.title ?? '') !== titleKey(text ?? '')
+        ) {
+          return `[${text}](${DOC_LINK_BASE}/${named}`;
+        }
+        return whole;
+      }
       const target = byTitle(id) ?? (text ? byTitle(text) : null);
       if (target) {
         return inLink === undefined

@@ -236,6 +236,17 @@ describe('link target resolution', () => {
     );
   });
 
+  test('follows the link text when the id names a different document', () => {
+    expect(
+      resolveDocLinks(
+        '[Getting Started](affine://doc/def456) [see budget](affine://doc/def456)',
+        docs
+      )
+    ).toBe(
+      '[Getting Started](affine://doc/abc123) [see budget](affine://doc/def456)'
+    );
+  });
+
   test('refuses links nothing matches', () => {
     expect(() => resolveDocLinks('[Nope](affine://doc/<id>)', docs)).toThrow(
       /do not exist: <id>/
