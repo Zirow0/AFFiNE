@@ -667,8 +667,8 @@ const DOC_EDITING_GUIDE = `# Working with documents
 - Document content you write must be Markdown (e.g. "# Heading", "- item", "- [ ] task"), never HTML.
 - To change a document use doc_update (full new body with markers kept), doc_append (add content), doc_create (new doc) or doc_update_meta (rename). Only edit when the user asked you to change or create something; otherwise answer in chat.
 - After editing, briefly tell the user what you changed.
-- Links to other documents look like [text](affine://doc/<doc id>) (add ?blockIds=<block id> to point at a block). Write links in exactly this form to link documents; find doc ids with doc_keyword_search. Use doc_links to see which documents link to each other.
-- Toggle (collapsible) lists are list items starting with "▸ ", e.g. "- ▸ Details" with the hidden content indented under it. Callouts are quotes starting with an emoji marker, e.g. "> [!💡] Remember this" (or [!NOTE], [!TIP], [!WARNING]).
+- Links to other documents look like [text](affine://doc/<doc id>) (add ?blockIds=<block id> to point at a block). Write links in exactly this form to link documents; always get real doc ids from doc_keyword_search (never invent or use placeholder ids). Use doc_links to see which documents link to each other.
+- Toggle (collapsible) lists are list items starting with "▸ ", with the hidden content on the next lines indented by two spaces (not quoted), e.g. "- ▸ Details\n  - hidden item". Callouts are quotes starting with an emoji marker, e.g. "> [!💡] Remember this" (or [!NOTE], [!TIP], [!WARNING]).
 - Databases (tables with typed columns, also kanban) are separate blocks: find them with database_list, read rows with database_read and change them with the database_* tools — never rewrite a database through doc_update.
 - Images appear as ![caption](affine-image:<blob id>); call doc_view_images with those blob ids to see them.
 - Tags and properties (status, dates, checkboxes, …) are not part of the body: read them with doc_properties / tag_list / tag_docs and change them with doc_set_tags / doc_set_property; create a missing property with property_create only when the user asks for it.`;

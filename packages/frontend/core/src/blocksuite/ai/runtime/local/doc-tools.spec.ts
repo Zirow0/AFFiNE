@@ -241,6 +241,17 @@ describe('toggle lists and callouts', () => {
     expect((lists[0].props as { type: string }).type).toBe('toggle');
   });
 
+  test('quoted children of a toggle become its children', async () => {
+    const store = await createPage('Intro');
+    await appendMarkdown(store, '- ▸ Notes\n> - Buy organic if possible');
+    const toggle = note(store).children.at(-1)!;
+    expect((toggle.props as { type: string }).type).toBe('toggle');
+    expect(toggle.children).toHaveLength(1);
+    expect((toggle.children[0].props as { text: Text }).text.toString()).toBe(
+      'Buy organic if possible'
+    );
+  });
+
   test('callouts accept emoji and GitHub-style markers', async () => {
     const store = await createPage('Intro');
     await appendMarkdown(

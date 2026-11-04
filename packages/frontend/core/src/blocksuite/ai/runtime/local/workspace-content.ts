@@ -168,26 +168,72 @@ export function createLocalWorkspaceContent(
     }
   };
 
+  /**
+   * Refuse content that links to documents which do not exist (models like to
+   * write placeholders such as `affine://doc/<id>`), so the model can look the
+   * id up and try again instead of leaving a broken link in the page.
+   */
+  const assertDocLinks = (markdown: string) => {
+    const broken = new Set<string>();
+    for (const match of markdown.matchAll(/affine:\/\/doc\/([^)\s?#]*)/g)) {
+      let id = match[1];
+      try {
+        id = decodeURIComponent(id);
+      } catch {
+        // keep the raw id
+      }
+      const record = id ? docsService.list.doc$(id).value : null;
+      if (!record || record.trash$.value) broken.add(id || '(empty)');
+    }
+    if (broken.size) {
+      throw new Error(
+        `Links point to documents that do not exist: ${[...broken].join(', ')}. Find the real doc id with doc_keyword_search (it matches titles too) and write the link again, or leave the link out. Nothing was changed.`
+      );
+    }
+  };
+
   return {
     ...meta,
     async searchDocs(query, limit = 10) {
-      if (!query.trim()) return [];
-      const hits = await firstValueFrom(
+      const wanted = query.trim().toLowerCase();
+      if (!wanted) return [];
+      // Title matches come first and do not depend on the full-text index,
+      // which may still be building right after the app starts.
+      const titleHits = docsService.list.docs$.value
+        .filter(record => !record.trash$.value)
+        .map(record => ({ record, title: record.title$.value.trim() }))
+        .filter(({ title }) => title && title.toLowerCase().includes(wanted))
+        .sort(
+          (a, b) =>
+            Number(b.title.toLowerCase() === wanted) -
+              Number(a.title.toLowerCase() === wanted) ||
+            a.title.length - b.title.length
+        )
+        .map(({ record, title }) => ({
+          docId: record.id,
+          title,
+          excerpt: '',
+        }));
+      const indexHits = await firstValueFrom(
         docsSearchService.search$(query, 'local').pipe(timeout(10_000))
-      );
+      ).catch(() => []);
       const seen = new Set<string>();
-      return hits
+      return [
+        ...titleHits,
+        ...indexHits
+          .filter(hit => !docsService.list.doc$(hit.docId).value?.trash$.value)
+          .map(hit => ({
+            docId: hit.docId,
+            title: hit.title || 'Untitled',
+            excerpt: hit.blockContent,
+          })),
+      ]
         .filter(hit => {
           if (seen.has(hit.docId)) return false;
           seen.add(hit.docId);
-          return !docsService.list.doc$(hit.docId).value?.trash$.value;
+          return true;
         })
-        .slice(0, limit)
-        .map(hit => ({
-          docId: hit.docId,
-          title: hit.title || 'Untitled',
-          excerpt: hit.blockContent,
-        }));
+        .slice(0, limit);
     },
     async readDoc(docId) {
       return withDoc(docId, async doc => {
@@ -302,6 +348,7 @@ export function createLocalWorkspaceContent(
       });
     },
     async createDoc(title, markdown) {
+      assertDocLinks(markdown);
       const record = docsService.createDoc({ title, primaryMode: 'page' });
       const inserted = await withDoc(record.id, doc =>
         appendMarkdown(doc.blockSuiteDoc, markdown)
@@ -309,11 +356,13 @@ export function createLocalWorkspaceContent(
       return { docId: record.id, title, blocks: inserted ?? 0 };
     },
     async editDoc(docId, markdown) {
+      assertDocLinks(markdown);
       return withDoc(docId, doc =>
         applyTaggedMarkdown(doc.blockSuiteDoc, markdown)
       );
     },
     async appendToDoc(docId, markdown, afterBlockId) {
+      assertDocLinks(markdown);
       const inserted = await withDoc(docId, doc =>
         appendMarkdown(doc.blockSuiteDoc, markdown, afterBlockId)
       );

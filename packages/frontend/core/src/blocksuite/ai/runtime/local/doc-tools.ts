@@ -109,6 +109,33 @@ export function normalizeCalloutMarkdown(markdown: string) {
   );
 }
 
+/**
+ * Small models often put the children of a toggle item in a quote
+ * (`- ▸ Notes` followed by `> - child`). Indent such quoted lines under the
+ * toggle instead, so they become its hidden content. Only quoted lines right
+ * after the toggle item are moved; a quote after a blank line stays a quote.
+ */
+export function normalizeToggleMarkdown(markdown: string) {
+  const lines = markdown.split('\n');
+  let toggleIndent: string | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const toggle = /^(\s*)(?:[-*+]|\d+[.)])\s+(?:▸|\\?\[>\])\s/.exec(line);
+    if (toggle) {
+      toggleIndent = toggle[1];
+      continue;
+    }
+    if (toggleIndent === null) continue;
+    const quoted = /^\s*>\s?(.*)$/.exec(line);
+    if (quoted && !/^\s*\\?\[!/.test(quoted[1])) {
+      lines[i] = `${toggleIndent}  ${quoted[1]}`;
+      continue;
+    }
+    toggleIndent = null;
+  }
+  return lines.join('\n');
+}
+
 export type LocalDocImage = {
   blockId: string;
   blobId: string;
@@ -288,7 +315,7 @@ async function insertAt(
   ]);
   const adapter = new MarkdownAdapter(transformer, store.provider);
   const snapshot = await adapter.toSliceSnapshot({
-    file: normalizeCalloutMarkdown(content),
+    file: normalizeCalloutMarkdown(normalizeToggleMarkdown(content)),
     assets: transformer.assetsManager,
     workspaceId: store.workspace.id,
     pageId: store.id,
