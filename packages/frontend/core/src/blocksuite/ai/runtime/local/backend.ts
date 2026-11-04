@@ -58,6 +58,19 @@ export interface LocalWorkspaceContent {
     afterBlockId?: string
   ): Promise<{ inserted: number } | null>;
   renameDoc?(docId: string, title: string): Promise<boolean>;
+  /** database blocks of a doc; see database-tools.ts for actions */
+  database?(
+    docId: string,
+    action:
+      | 'list'
+      | 'read'
+      | 'create'
+      | 'add_rows'
+      | 'update_rows'
+      | 'delete_rows'
+      | 'add_column',
+    args: Record<string, any>
+  ): Promise<unknown>;
   /** docs this doc links to, and docs linking to it */
   getDocLinks?(docId: string): Promise<{
     docId: string;
@@ -374,6 +387,129 @@ const READ_TOOLS: LocalAiToolDefinition[] = [
   ),
 ];
 
+const COLUMN_TYPES = [
+  'rich-text',
+  'number',
+  'select',
+  'multi-select',
+  'checkbox',
+  'date',
+  'progress',
+  'link',
+];
+
+const ROW_VALUES_DOC =
+  'Cell values are plain text, keyed by column name: numbers as digits, checkbox as true/false, date as YYYY-MM-DD, select as the option name, multi-select as comma-separated names (missing options are created), progress as 0-100.';
+
+const DATABASE_READ_TOOLS: LocalAiToolDefinition[] = [
+  fn(
+    'database_list',
+    'List the database blocks of a document with their columns (name, type, select options) and row counts.',
+    { doc_id: { type: 'string', description: 'The document id' } },
+    ['doc_id']
+  ),
+  fn(
+    'database_read',
+    'Read the rows of a database block: row ids, row titles and cell values as text.',
+    {
+      doc_id: { type: 'string', description: 'The document id' },
+      block_id: { type: 'string', description: 'The database block id' },
+    },
+    ['doc_id', 'block_id']
+  ),
+];
+
+const rowsSchema = (withId: boolean) => ({
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: {
+      ...(withId ? { row_id: { type: 'string' } } : {}),
+      title: { type: 'string', description: 'Row title (first column)' },
+      values: {
+        type: 'object',
+        description: 'Cell values by column name',
+        additionalProperties: { type: 'string' },
+      },
+    },
+    ...(withId ? { required: ['row_id'] } : {}),
+  },
+});
+
+const DATABASE_WRITE_TOOLS: LocalAiToolDefinition[] = [
+  fn(
+    'database_create',
+    'Create a database block in a document (at the end or after a block) with columns and optional initial rows. ' +
+      ROW_VALUES_DOC,
+    {
+      doc_id: { type: 'string', description: 'The document id' },
+      title: { type: 'string', description: 'Database title' },
+      columns: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            type: { type: 'string', enum: COLUMN_TYPES },
+          },
+          required: ['name', 'type'],
+        },
+        description:
+          'Columns besides the row title. rich-text for free text, select for a status-like choice.',
+      },
+      rows: rowsSchema(false),
+      view: { type: 'string', enum: ['table', 'kanban'] },
+      after_block_id: {
+        type: 'string',
+        description: 'Optional block id to insert after',
+      },
+    },
+    ['doc_id', 'title', 'columns']
+  ),
+  fn(
+    'database_add_rows',
+    'Add rows to a database block. ' + ROW_VALUES_DOC,
+    {
+      doc_id: { type: 'string' },
+      block_id: { type: 'string', description: 'The database block id' },
+      rows: rowsSchema(false),
+    },
+    ['doc_id', 'block_id', 'rows']
+  ),
+  fn(
+    'database_update_rows',
+    'Change the title or cells of existing database rows (only the given cells change). ' +
+      ROW_VALUES_DOC,
+    {
+      doc_id: { type: 'string' },
+      block_id: { type: 'string', description: 'The database block id' },
+      rows: rowsSchema(true),
+    },
+    ['doc_id', 'block_id', 'rows']
+  ),
+  fn(
+    'database_delete_rows',
+    'Delete rows from a database block.',
+    {
+      doc_id: { type: 'string' },
+      block_id: { type: 'string', description: 'The database block id' },
+      row_ids: { type: 'array', items: { type: 'string' } },
+    },
+    ['doc_id', 'block_id', 'row_ids']
+  ),
+  fn(
+    'database_add_column',
+    'Add a column to a database block.',
+    {
+      doc_id: { type: 'string' },
+      block_id: { type: 'string', description: 'The database block id' },
+      name: { type: 'string' },
+      type: { type: 'string', enum: COLUMN_TYPES },
+    },
+    ['doc_id', 'block_id', 'name', 'type']
+  ),
+];
+
 const LINKS_TOOL = fn(
   'doc_links',
   'List the documents a document links to and the documents that link to it (backlinks).',
@@ -532,6 +668,7 @@ const DOC_EDITING_GUIDE = `# Working with documents
 - To change a document use doc_update (full new body with markers kept), doc_append (add content), doc_create (new doc) or doc_update_meta (rename). Only edit when the user asked you to change or create something; otherwise answer in chat.
 - After editing, briefly tell the user what you changed.
 - Links to other documents look like [text](affine://doc/<doc id>) (add ?blockIds=<block id> to point at a block). Write links in exactly this form to link documents; find doc ids with doc_keyword_search. Use doc_links to see which documents link to each other.
+- Databases (tables with typed columns, also kanban) are separate blocks: find them with database_list, read rows with database_read and change them with the database_* tools — never rewrite a database through doc_update.
 - Images appear as ![caption](affine-image:<blob id>); call doc_view_images with those blob ids to see them.
 - Tags and properties (status, dates, checkboxes, …) are not part of the body: read them with doc_properties / tag_list / tag_docs and change them with doc_set_tags / doc_set_property; create a missing property with property_create only when the user asks for it.`;
 
@@ -913,11 +1050,15 @@ export class LocalCopilotBackend {
     if (!content) return undefined;
     const tools = [...READ_TOOLS];
     if (content.getDocLinks) tools.push(LINKS_TOOL);
+    if (content.database) tools.push(...DATABASE_READ_TOOLS);
     if (content.listTags) tools.push(...META_READ_TOOLS);
     if (model.supportsVision && content.getImage) tools.push(IMAGE_TOOL);
     if (content.editDoc) tools.push(...WRITE_TOOLS);
     if (content.editDoc && content.setDocProperty) {
       tools.push(...META_WRITE_TOOLS);
+    }
+    if (content.editDoc && content.database) {
+      tools.push(...DATABASE_WRITE_TOOLS);
     }
     return tools;
   }
@@ -950,6 +1091,23 @@ export class LocalCopilotBackend {
           const doc = await content.readDoc(docId);
           if (!doc) return notFound;
           return { ...doc, markdown: truncate(doc.markdown) };
+        }
+        case 'database_list':
+        case 'database_read':
+        case 'database_create':
+        case 'database_add_rows':
+        case 'database_update_rows':
+        case 'database_delete_rows':
+        case 'database_add_column': {
+          if (!content.database) throw new Error('Databases are unavailable');
+          const action = name.slice('database_'.length) as Parameters<
+            NonNullable<LocalWorkspaceContent['database']>
+          >[1];
+          const result = await content.database(docId, action, args);
+          if (result === null) return notFound;
+          return action === 'list' || action === 'read'
+            ? result
+            : { success: true, docId, ...(result as object) };
         }
         case 'doc_links': {
           if (!content.getDocLinks) throw new Error('Links are unavailable');

@@ -5,9 +5,19 @@ import { firstValueFrom, timeout } from 'rxjs';
 
 import type { LocalWorkspaceContent } from './backend';
 import {
+  addDatabaseColumn,
+  addDatabaseRows,
+  createDatabase,
+  deleteDatabaseRows,
+  listDatabases,
+  readDatabase,
+  updateDatabaseRows,
+} from './database-tools';
+import {
   appendMarkdown,
   applyTaggedMarkdown,
   exportTaggedMarkdown,
+  insertionPoint,
 } from './doc-tools';
 
 /**
@@ -233,6 +243,63 @@ export function createLocalWorkspaceContent(
             };
           }),
       };
+    },
+    async database(docId, action, args) {
+      return withDoc(docId, async doc => {
+        const store = doc.blockSuiteDoc;
+        const blockId = String(args.block_id ?? '');
+        switch (action) {
+          case 'list':
+            return listDatabases(store);
+          case 'read':
+            return readDatabase(store, blockId);
+          case 'create': {
+            const { parentId, index } = insertionPoint(
+              store,
+              args.after_block_id ? String(args.after_block_id) : undefined
+            );
+            const id = createDatabase(store, parentId, index, {
+              title: String(args.title ?? 'Database'),
+              columns: Array.isArray(args.columns) ? args.columns : [],
+              view: args.view === 'kanban' ? 'kanban' : 'table',
+            });
+            const rows = Array.isArray(args.rows) ? args.rows : [];
+            const added = rows.length ? addDatabaseRows(store, id, rows) : null;
+            return { blockId: id, rows: added?.rowIds.length ?? 0 };
+          }
+          case 'add_rows':
+            return addDatabaseRows(
+              store,
+              blockId,
+              Array.isArray(args.rows) ? args.rows : []
+            );
+          case 'update_rows':
+            return updateDatabaseRows(
+              store,
+              blockId,
+              (Array.isArray(args.rows) ? args.rows : []).map((row: any) => ({
+                rowId: String(row.row_id ?? row.rowId ?? ''),
+                title: row.title,
+                values: row.values,
+              }))
+            );
+          case 'delete_rows':
+            return deleteDatabaseRows(
+              store,
+              blockId,
+              (Array.isArray(args.row_ids) ? args.row_ids : []).map(String)
+            );
+          case 'add_column':
+            return addDatabaseColumn(
+              store,
+              blockId,
+              String(args.name ?? ''),
+              String(args.type ?? 'rich-text')
+            );
+          default:
+            throw new Error(`Unknown database action ${action}`);
+        }
+      });
     },
     async createDoc(title, markdown) {
       const record = docsService.createDoc({ title, primaryMode: 'page' });

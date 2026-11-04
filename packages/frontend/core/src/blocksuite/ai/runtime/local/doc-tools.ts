@@ -281,10 +281,12 @@ export async function applyTaggedMarkdown(
         const sibling = note.children[index] ?? null;
         store.moveBlocks([model], note, sibling, true);
       }
-      // images cannot be re-created from Markdown; keep them as they are
+      // images/databases cannot be re-created from Markdown; keep them as they are
       const before = normalize(await blockToMarkdown(store, model));
       if (
+        // images and databases are edited with dedicated tools only
         model.flavour === 'affine:image' ||
+        model.flavour === 'affine:database' ||
         before === normalize(block.content)
       ) {
         stats.unchanged++;
@@ -319,4 +321,13 @@ export async function appendMarkdown(
     index = at + 1;
   }
   return insertAt(store, note, markdown, index);
+}
+
+/** Where to insert a new top-level block: at the end or after a block. */
+export function insertionPoint(store: Store, afterBlockId?: string) {
+  const note = ensurePageNote(store);
+  if (!afterBlockId) return { parentId: note.id, index: note.children.length };
+  const at = note.children.findIndex(child => child.id === afterBlockId);
+  if (at === -1) throw new Error(`Block ${afterBlockId} not found`);
+  return { parentId: note.id, index: at + 1 };
 }
