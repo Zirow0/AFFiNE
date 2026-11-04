@@ -18,6 +18,7 @@ import {
   applyTaggedMarkdown,
   exportTaggedMarkdown,
   insertionPoint,
+  resolveDocLinks,
 } from './doc-tools';
 
 /**
@@ -168,29 +169,13 @@ export function createLocalWorkspaceContent(
     }
   };
 
-  /**
-   * Refuse content that links to documents which do not exist (models like to
-   * write placeholders such as `affine://doc/<id>`), so the model can look the
-   * id up and try again instead of leaving a broken link in the page.
-   */
-  const assertDocLinks = (markdown: string) => {
-    const broken = new Set<string>();
-    for (const match of markdown.matchAll(/affine:\/\/doc\/([^)\s?#]*)/g)) {
-      let id = match[1];
-      try {
-        id = decodeURIComponent(id);
-      } catch {
-        // keep the raw id
-      }
-      const record = id ? docsService.list.doc$(id).value : null;
-      if (!record || record.trash$.value) broken.add(id || '(empty)');
-    }
-    if (broken.size) {
-      throw new Error(
-        `Links point to documents that do not exist: ${[...broken].join(', ')}. Find the real doc id with doc_keyword_search (it matches titles too) and write the link again, or leave the link out. Nothing was changed.`
-      );
-    }
-  };
+  const resolveLinks = (markdown: string) =>
+    resolveDocLinks(
+      markdown,
+      docsService.list.docs$.value
+        .filter(record => !record.trash$.value)
+        .map(record => ({ id: record.id, title: record.title$.value }))
+    );
 
   return {
     ...meta,
@@ -348,23 +333,23 @@ export function createLocalWorkspaceContent(
       });
     },
     async createDoc(title, markdown) {
-      assertDocLinks(markdown);
+      const content = resolveLinks(markdown);
       const record = docsService.createDoc({ title, primaryMode: 'page' });
       const inserted = await withDoc(record.id, doc =>
-        appendMarkdown(doc.blockSuiteDoc, markdown)
+        appendMarkdown(doc.blockSuiteDoc, content)
       );
       return { docId: record.id, title, blocks: inserted ?? 0 };
     },
     async editDoc(docId, markdown) {
-      assertDocLinks(markdown);
+      const content = resolveLinks(markdown);
       return withDoc(docId, doc =>
-        applyTaggedMarkdown(doc.blockSuiteDoc, markdown)
+        applyTaggedMarkdown(doc.blockSuiteDoc, content)
       );
     },
     async appendToDoc(docId, markdown, afterBlockId) {
-      assertDocLinks(markdown);
+      const content = resolveLinks(markdown);
       const inserted = await withDoc(docId, doc =>
-        appendMarkdown(doc.blockSuiteDoc, markdown, afterBlockId)
+        appendMarkdown(doc.blockSuiteDoc, content, afterBlockId)
       );
       return inserted === null ? null : { inserted };
     },

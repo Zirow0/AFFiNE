@@ -22,6 +22,7 @@ import {
   type LocalChatSession,
   LocalSessionStore,
 } from './session-store';
+import { mayBeTextToolCall, parseTextToolCalls } from './text-tool-calls';
 
 /**
  * Access to the current workspace's content for AI context and tools.
@@ -955,26 +956,46 @@ export class LocalCopilotBackend {
       for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
         let toolCalls: LocalAiToolCall[] = [];
         let text = '';
+        const roundTools = round < MAX_TOOL_ROUNDS ? tools : undefined;
+        // While the answer may still be a tool call written as text, hold it
+        // back instead of showing raw JSON to the user.
+        let holding = !!roundTools;
+        let flushed = 0;
+        const flush = () => {
+          if (text.length > flushed) {
+            emit({ type: 'text-delta', textDelta: text.slice(flushed) });
+            flushed = text.length;
+          }
+        };
         for await (const event of streamHub.stream(
           {
             baseUrl: model.baseUrl,
             apiKey: model.apiKey,
             model: model.model,
             messages,
-            tools: round < MAX_TOOL_ROUNDS ? tools : undefined,
+            tools: roundTools,
             temperature: prompt?.temperature,
           },
           signal
         )) {
           if (event.type === 'text-delta') {
             text += event.textDelta;
-            emit({ type: 'text-delta', textDelta: event.textDelta });
+            if (holding && !mayBeTextToolCall(text)) holding = false;
+            if (!holding) flush();
           } else if (event.type === 'reasoning') {
             emit({ type: 'reasoning', textDelta: event.textDelta });
           } else if (event.type === 'tool-calls') {
             toolCalls = event.toolCalls;
           }
         }
+        if (holding && !toolCalls.length && roundTools) {
+          toolCalls = parseTextToolCalls(
+            text,
+            new Set(roundTools.map(tool => tool.function.name))
+          );
+          if (toolCalls.length) text = '';
+        }
+        if (!toolCalls.length) flush();
         if (signal.aborted || !toolCalls.length) break;
 
         messages.push({

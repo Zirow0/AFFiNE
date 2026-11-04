@@ -14,6 +14,7 @@ import {
   applyTaggedMarkdown,
   exportTaggedMarkdown,
   parseTaggedMarkdown,
+  resolveDocLinks,
 } from './doc-tools';
 
 const extensions = getStoreManager().config.init().value.get('store');
@@ -205,6 +206,40 @@ describe('links between documents', () => {
     const { markdown } = await exportTaggedMarkdown(store);
     expect(markdown).toContain('[Budget 2026](affine://doc/target-doc)');
     expect(markdown).toContain('affine://doc/target-doc?blockIds=b1');
+  });
+});
+
+describe('link target resolution', () => {
+  const docs = [
+    { id: 'abc123', title: 'Getting Started' },
+    { id: 'def456', title: 'Budget 2026' },
+  ];
+
+  test('keeps real ids and resolves titles and placeholders', () => {
+    expect(
+      resolveDocLinks(
+        [
+          '[ok](affine://doc/abc123?blockIds=b1)',
+          '[x](affine://doc/Getting-Started)',
+          '[Budget 2026](affine://doc/<that id>)',
+          '[y](affine://doc/budget_2026)',
+        ].join(' '),
+        docs
+      )
+    ).toBe(
+      [
+        '[ok](affine://doc/abc123?blockIds=b1)',
+        '[x](affine://doc/abc123)',
+        '[Budget 2026](affine://doc/def456)',
+        '[y](affine://doc/def456)',
+      ].join(' ')
+    );
+  });
+
+  test('refuses links nothing matches', () => {
+    expect(() => resolveDocLinks('[Nope](affine://doc/<id>)', docs)).toThrow(
+      /do not exist: <id>/
+    );
   });
 });
 

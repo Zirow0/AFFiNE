@@ -136,6 +136,73 @@ export function normalizeToggleMarkdown(markdown: string) {
   return lines.join('\n');
 }
 
+export class DocLinkError extends Error {
+  override name = 'DocLinkError';
+}
+
+/**
+ * Check the targets of `affine://doc/<id>` links before writing. Small models
+ * often put a title (`affine://doc/Getting-Started`) or a placeholder
+ * (`<that id>`) where the id belongs: when the "id" or the link text names
+ * exactly one document, the link is pointed at it. Anything else is refused,
+ * so the model can look the id up instead of leaving a broken link.
+ *
+ * @param docs the live (non-trashed) documents of the workspace
+ */
+export function resolveDocLinks(
+  markdown: string,
+  docs: { id: string; title: string }[]
+) {
+  const titleKey = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[-_+]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const ids = new Set(docs.map(doc => doc.id));
+  const byTitle = (value: string) => {
+    const key = titleKey(value);
+    if (!key) return null;
+    const matches = docs.filter(doc => titleKey(doc.title) === key);
+    return matches.length === 1 ? matches[0].id : null;
+  };
+  const broken = new Set<string>();
+  const resolved = markdown.replace(
+    // inside [text](...) the id runs to the closing parenthesis, so that
+    // placeholders with spaces (`<that id>`) are caught as a whole
+    /\[([^\]]*)\]\(affine:\/\/doc\/([^)?#]*)|affine:\/\/doc\/([^)\s?#]*)/g,
+    (
+      whole: string,
+      text: string | undefined,
+      inLink: string | undefined,
+      bare: string | undefined
+    ) => {
+      const raw = (inLink ?? bare ?? '').trim();
+      let id = raw;
+      try {
+        id = decodeURIComponent(raw);
+      } catch {
+        // keep the raw id
+      }
+      if (ids.has(id)) return whole;
+      const target = byTitle(id) ?? (text ? byTitle(text) : null);
+      if (target) {
+        return inLink === undefined
+          ? `${DOC_LINK_BASE}/${target}`
+          : `[${text}](${DOC_LINK_BASE}/${target}`;
+      }
+      broken.add(id || '(empty)');
+      return whole;
+    }
+  );
+  if (broken.size) {
+    throw new DocLinkError(
+      `Links point to documents that do not exist: ${[...broken].join(', ')}. Find the real doc id with doc_keyword_search (it matches titles too) and write the link again, or leave the link out. Nothing was changed.`
+    );
+  }
+  return resolved;
+}
+
 export type LocalDocImage = {
   blockId: string;
   blobId: string;
