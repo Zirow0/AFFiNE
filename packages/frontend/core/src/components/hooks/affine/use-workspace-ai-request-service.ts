@@ -2,13 +2,16 @@ import {
   type AIRequestService,
   createAIRequestService,
   createLocalAIRequestService,
+  createLocalWorkspaceMeta,
 } from '@affine/core/blocksuite/ai';
 import { createLocalWorkspaceContent } from '@affine/core/blocksuite/ai/runtime/local/workspace-content';
 import { EventSourceService, GraphQLService } from '@affine/core/modules/cloud';
 import { DocsService } from '@affine/core/modules/doc';
 import { DocsSearchService } from '@affine/core/modules/docs-search';
 import { NbstoreService } from '@affine/core/modules/storage';
+import { TagService } from '@affine/core/modules/tag';
 import { WorkspaceService } from '@affine/core/modules/workspace';
+import { WorkspacePropertyService } from '@affine/core/modules/workspace-property';
 import { useService } from '@toeverything/infra';
 import { useMemo } from 'react';
 
@@ -31,14 +34,23 @@ export function useWorkspaceAIRequestService(): AIRequestService {
   const nbstoreService = useService(NbstoreService);
   const docsService = useService(DocsService);
   const docsSearchService = useService(DocsSearchService);
+  const tagService = useService(TagService);
+  const workspacePropertyService = useService(WorkspacePropertyService);
   const workspace = useService(WorkspaceService).workspace;
 
   return useMemo(() => {
     if (isOnDeviceAIWorkspace(workspace)) {
       return createLocalAIRequestService(
         workspace.id,
-        createLocalWorkspaceContent(docsService, docsSearchService, blobId =>
-          workspace.engine.blob.get(blobId)
+        createLocalWorkspaceContent(
+          docsService,
+          docsSearchService,
+          blobId => workspace.engine.blob.get(blobId),
+          createLocalWorkspaceMeta(
+            docsService,
+            tagService,
+            workspacePropertyService
+          )
         )
       );
     }
@@ -60,6 +72,8 @@ export function useWorkspaceAIRequestService(): AIRequestService {
     eventSourceService,
     graphqlService,
     nbstoreService,
+    tagService,
     workspace,
+    workspacePropertyService,
   ]);
 }

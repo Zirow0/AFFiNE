@@ -58,6 +58,51 @@ export interface LocalWorkspaceContent {
     afterBlockId?: string
   ): Promise<{ inserted: number } | null>;
   renameDoc?(docId: string, title: string): Promise<boolean>;
+  listTags?(): Promise<
+    { id: string; name: string; color: string; docCount: number }[]
+  >;
+  docsByTag?(tag: string): Promise<{
+    tag: { id: string; name: string };
+    docs: { docId: string; title: string }[];
+  } | null>;
+  listProperties?(): Promise<
+    {
+      id: string;
+      name: string;
+      type: string;
+      builtIn: boolean;
+      editable: boolean;
+    }[]
+  >;
+  getDocProperties?(docId: string): Promise<{
+    docId: string;
+    title: string;
+    properties: {
+      id: string;
+      name: string;
+      type: string;
+      editable: boolean;
+      value: string | string[] | null;
+    }[];
+  } | null>;
+  setDocTags?(
+    docId: string,
+    change: { add?: string[]; remove?: string[] }
+  ): Promise<{ tags: string[]; created: string[] } | null>;
+  setDocProperty?(
+    docId: string,
+    property: string,
+    value: unknown
+  ): Promise<{
+    id: string;
+    name: string;
+    type: string;
+    value: string | string[] | null;
+  } | null>;
+  createProperty?(
+    name: string,
+    type: string
+  ): Promise<{ id: string; name: string; type: string; existed: boolean }>;
   /** a downscaled data URL of a workspace image blob */
   getImage?(blobId: string): Promise<string | null>;
 }
@@ -386,6 +431,77 @@ const WRITE_TOOLS: LocalAiToolDefinition[] = [
   ),
 ];
 
+const META_READ_TOOLS: LocalAiToolDefinition[] = [
+  fn(
+    'tag_list',
+    'List all tags of the workspace with how many documents use each.',
+    {},
+    []
+  ),
+  fn(
+    'tag_docs',
+    'List the documents that have a tag (by tag name or id).',
+    { tag: { type: 'string', description: 'Tag name or id' } },
+    ['tag']
+  ),
+  fn(
+    'property_list',
+    'List the document properties defined in the workspace (built-in and custom) with their types and whether they can be edited.',
+    {},
+    []
+  ),
+  fn(
+    'doc_properties',
+    'Read the properties of a document: tags, doc mode, template flag, page width, created/updated dates and all custom properties with their values.',
+    { doc_id: { type: 'string', description: 'The document id' } },
+    ['doc_id']
+  ),
+];
+
+const META_WRITE_TOOLS: LocalAiToolDefinition[] = [
+  fn(
+    'doc_set_tags',
+    'Add and/or remove tags of a document by tag name. Tags that do not exist yet are created.',
+    {
+      doc_id: { type: 'string', description: 'The document id' },
+      add: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Tag names to add',
+      },
+      remove: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Tag names to remove',
+      },
+    },
+    ['doc_id']
+  ),
+  fn(
+    'doc_set_property',
+    'Set a property of a document (by property name or id). Values: text → any text; number → a number; checkbox → true/false; date → YYYY-MM-DD; "Doc mode" → page/edgeless; "Template" → true/false; "Page width" → standard/fullWidth. An empty value clears text, number and date properties. Use doc_set_tags for tags and doc_update_meta for the title.',
+    {
+      doc_id: { type: 'string', description: 'The document id' },
+      property: { type: 'string', description: 'Property name or id' },
+      value: { type: 'string', description: 'The new value' },
+    },
+    ['doc_id', 'property', 'value']
+  ),
+  fn(
+    'property_create',
+    'Create a new custom document property for the whole workspace (it then exists on every document, empty until set).',
+    {
+      name: { type: 'string', description: 'Property name' },
+      type: {
+        type: 'string',
+        enum: ['text', 'number', 'checkbox', 'date'],
+        description: 'Property type',
+      },
+    },
+    ['name', 'type']
+  ),
+];
+
 /**
  * Small models often double-escape Markdown in tool arguments, sending the
  * two characters `\n` instead of a newline. Undo that when the text has no
@@ -402,7 +518,8 @@ const DOC_EDITING_GUIDE = `# Working with documents
 - Document content you write must be Markdown (e.g. "# Heading", "- item", "- [ ] task"), never HTML.
 - To change a document use doc_update (full new body with markers kept), doc_append (add content), doc_create (new doc) or doc_update_meta (rename). Only edit when the user asked you to change or create something; otherwise answer in chat.
 - After editing, briefly tell the user what you changed.
-- Images appear as ![caption](affine-image:<blob id>); call doc_view_images with those blob ids to see them.`;
+- Images appear as ![caption](affine-image:<blob id>); call doc_view_images with those blob ids to see them.
+- Tags and properties (status, dates, checkboxes, …) are not part of the body: read them with doc_properties / tag_list / tag_docs and change them with doc_set_tags / doc_set_property; create a missing property with property_create only when the user asks for it.`;
 
 type GqlResult = Record<string, unknown>;
 
@@ -781,8 +898,12 @@ export class LocalCopilotBackend {
     const content = this.content;
     if (!content) return undefined;
     const tools = [...READ_TOOLS];
+    if (content.listTags) tools.push(...META_READ_TOOLS);
     if (model.supportsVision && content.getImage) tools.push(IMAGE_TOOL);
     if (content.editDoc) tools.push(...WRITE_TOOLS);
+    if (content.editDoc && content.setDocProperty) {
+      tools.push(...META_WRITE_TOOLS);
+    }
     return tools;
   }
 
@@ -814,6 +935,68 @@ export class LocalCopilotBackend {
           const doc = await content.readDoc(docId);
           if (!doc) return notFound;
           return { ...doc, markdown: truncate(doc.markdown) };
+        }
+        case 'tag_list': {
+          if (!content.listTags) throw new Error('Tags are unavailable');
+          return await content.listTags();
+        }
+        case 'tag_docs': {
+          if (!content.docsByTag) throw new Error('Tags are unavailable');
+          const found = await content.docsByTag(String(args.tag ?? ''));
+          return (
+            found ?? {
+              type: 'error',
+              name: 'Not found',
+              message: `Tag "${args.tag}" does not exist`,
+            }
+          );
+        }
+        case 'property_list': {
+          if (!content.listProperties) {
+            throw new Error('Properties are unavailable');
+          }
+          return await content.listProperties();
+        }
+        case 'doc_properties': {
+          if (!content.getDocProperties) {
+            throw new Error('Properties are unavailable');
+          }
+          return (await content.getDocProperties(docId)) ?? notFound;
+        }
+        case 'doc_set_tags': {
+          if (!content.setDocTags) throw new Error('Tags are unavailable');
+          const list = (value: unknown) =>
+            (Array.isArray(value) ? value : value ? [value] : []).map(String);
+          const updated = await content.setDocTags(docId, {
+            add: list(args.add),
+            remove: list(args.remove),
+          });
+          return updated ? { success: true, docId, ...updated } : notFound;
+        }
+        case 'doc_set_property': {
+          if (!content.setDocProperty) {
+            throw new Error('Properties are unavailable');
+          }
+          const updated = await content.setDocProperty(
+            docId,
+            String(args.property ?? ''),
+            args.value
+          );
+          return updated
+            ? { success: true, docId, property: updated }
+            : notFound;
+        }
+        case 'property_create': {
+          if (!content.createProperty) {
+            throw new Error('Properties are unavailable');
+          }
+          return {
+            success: true,
+            ...(await content.createProperty(
+              String(args.name ?? ''),
+              String(args.type ?? 'text')
+            )),
+          };
         }
         case 'doc_view_images': {
           if (!model?.supportsVision || !content.getImage) {

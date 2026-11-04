@@ -136,7 +136,9 @@ export function createLocalWorkspaceContent(
   docsSearchService: DocsSearchService,
   getBlob?: (
     blobId: string
-  ) => Promise<{ data: Uint8Array; mime?: string } | null | undefined>
+  ) => Promise<{ data: Uint8Array; mime?: string } | null | undefined>,
+  /** tags and properties, see `createLocalWorkspaceMeta` */
+  meta?: Partial<LocalWorkspaceContent>
 ): LocalWorkspaceContent {
   /** opens a live (non-trashed) doc, loaded and ready to edit */
   const withDoc = async <T>(
@@ -157,6 +159,7 @@ export function createLocalWorkspaceContent(
   };
 
   return {
+    ...meta,
     async searchDocs(query, limit = 10) {
       if (!query.trim()) return [];
       const hits = await firstValueFrom(

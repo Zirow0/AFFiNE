@@ -7,6 +7,7 @@ import {
   AIAppEvents,
   createAIRequestService,
   createLocalAIRequestService,
+  createLocalWorkspaceMeta,
   setupAIProvider,
 } from '@affine/core/blocksuite/ai';
 import { createLocalWorkspaceContent } from '@affine/core/blocksuite/ai/runtime/local/workspace-content';
@@ -29,11 +30,13 @@ import { EditorSettingService } from '@affine/core/modules/editor-setting';
 import { useRegisterNavigationCommands } from '@affine/core/modules/navigation/view/use-register-navigation-commands';
 import { QuickSearchContainer } from '@affine/core/modules/quicksearch';
 import { NbstoreService } from '@affine/core/modules/storage';
+import { TagService } from '@affine/core/modules/tag';
 import { WorkbenchService } from '@affine/core/modules/workbench';
 import {
   getAFFiNEWorkspaceSchema,
   WorkspaceService,
 } from '@affine/core/modules/workspace';
+import { WorkspacePropertyService } from '@affine/core/modules/workspace-property';
 import { useI18n } from '@affine/i18n';
 import track from '@affine/track';
 import type { DocMode } from '@blocksuite/affine/model';
@@ -148,6 +151,8 @@ export const WorkspaceSideEffects = () => {
   const authService = useService(AuthService);
   const nbstoreService = useService(NbstoreService);
   const docsSearchService = useService(DocsSearchService);
+  const tagService = useService(TagService);
+  const workspacePropertyService = useService(WorkspacePropertyService);
   const realtimeConnectionError = useLiveData(
     useService(RealtimeService).connectionError$
   );
@@ -185,7 +190,12 @@ export const WorkspaceSideEffects = () => {
             createLocalWorkspaceContent(
               docsService,
               docsSearchService,
-              blobId => currentWorkspace.engine.blob.get(blobId)
+              blobId => currentWorkspace.engine.blob.get(blobId),
+              createLocalWorkspaceMeta(
+                docsService,
+                tagService,
+                workspacePropertyService
+              )
             )
           )
         : createAIRequestService(
@@ -213,6 +223,8 @@ export const WorkspaceSideEffects = () => {
     currentWorkspace.flavour,
     docsService,
     docsSearchService,
+    tagService,
+    workspacePropertyService,
     eventSourceService,
     nbstoreService,
     graphqlService,

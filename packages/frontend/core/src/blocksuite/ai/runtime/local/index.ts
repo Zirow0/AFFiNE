@@ -9,6 +9,7 @@ export {
   LocalAiNotConfiguredError,
   resolveLocalModel,
 } from './provider-config';
+export { createLocalWorkspaceMeta } from './workspace-meta';
 
 /**
  * Creates an {@link AIRequestService} that runs entirely on this device:

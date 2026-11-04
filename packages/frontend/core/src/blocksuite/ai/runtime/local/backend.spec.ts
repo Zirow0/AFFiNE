@@ -436,6 +436,99 @@ describe('local (server-less) AI backend', () => {
   });
 });
 
+describe('tags and properties tools', () => {
+  test('offers meta tools and routes property changes', async () => {
+    electron.state.scripts.push(
+      [
+        {
+          type: 'tool-calls',
+          toolCalls: [
+            {
+              id: 'm1',
+              type: 'function',
+              function: { name: 'tag_list', arguments: '{}' },
+            },
+            {
+              id: 'm2',
+              type: 'function',
+              function: {
+                name: 'doc_set_property',
+                arguments: '{"doc_id":"d1","property":"Status","value":"Done"}',
+              },
+            },
+            {
+              id: 'm3',
+              type: 'function',
+              function: {
+                name: 'doc_set_tags',
+                arguments: '{"doc_id":"d1","add":"Work"}',
+              },
+            },
+          ],
+        },
+        { type: 'done' },
+      ],
+      [{ type: 'text-delta', textDelta: 'Updated.' }, { type: 'done' }]
+    );
+    const setDocProperty = vi.fn(async () => ({
+      id: 'p1',
+      name: 'Status',
+      type: 'text',
+      value: 'Done',
+    }));
+    const setDocTags = vi.fn(async () => ({ tags: ['Work'], created: [] }));
+    const service = createLocalAIRequestService(WORKSPACE, {
+      searchDocs: async () => [],
+      readDoc: async () => null,
+      editDoc: async () => null,
+      listTags: async () => [
+        { id: 't1', name: 'Work', color: '#f00', docCount: 2 },
+      ],
+      setDocProperty,
+      setDocTags,
+    });
+    const sessionId = await service.createSession({
+      workspaceId: WORKSPACE,
+      promptName: 'Chat With AFFiNE AI',
+    } as BlockSuitePresets.AICreateSessionOptions);
+    const chunks = await collect(
+      (await service.executeAction('chat', {
+        workspaceId: WORKSPACE,
+        sessionId,
+        input: 'Mark d1 as done and tag it Work',
+        stream: true,
+      } as any)) as AsyncIterable<string>
+    );
+    const results = chunks
+      .map(chunk => JSON.parse(chunk))
+      .filter(o => o.type === 'tool-result');
+    expect(results[0].result).toEqual([
+      { id: 't1', name: 'Work', color: '#f00', docCount: 2 },
+    ]);
+    expect(setDocProperty).toHaveBeenCalledWith('d1', 'Status', 'Done');
+    expect(results[1].result).toMatchObject({ success: true });
+    // a single string is accepted where a list is expected
+    expect(setDocTags).toHaveBeenCalledWith('d1', {
+      add: ['Work'],
+      remove: [],
+    });
+    const toolNames = electron.state.requests[0].tools.map(
+      (t: any) => t.function.name
+    );
+    expect(toolNames).toEqual(
+      expect.arrayContaining([
+        'tag_list',
+        'tag_docs',
+        'property_list',
+        'doc_properties',
+        'doc_set_tags',
+        'doc_set_property',
+        'property_create',
+      ])
+    );
+  });
+});
+
 describe('markdownArg', () => {
   test('unescapes double-escaped newlines only when there are no real ones', async () => {
     const { markdownArg } = await import('./backend');
