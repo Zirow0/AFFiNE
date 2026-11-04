@@ -5,9 +5,12 @@ import {
   MarkdownAdapter,
   titleMiddleware,
 } from '@blocksuite/affine/shared/adapters';
-import { type BlockModel, Slice, type Store } from '@blocksuite/affine/store';
-
-import { insertFromMarkdown } from '../../../utils';
+import {
+  type BlockModel,
+  Slice,
+  type Store,
+  type TransformerMiddleware,
+} from '@blocksuite/affine/store';
 
 /**
  * Block-addressed Markdown for AI document editing (page mode only).
@@ -22,6 +25,17 @@ import { insertFromMarkdown } from '../../../utils';
  * history survive), changed ones are re-created from Markdown, blocks without
  * a known marker are inserted and missing ones are deleted.
  */
+
+/**
+ * Links to other docs are written as `[text](affine://doc/<docId>)`; the
+ * Markdown adapters turn such links into real doc references both ways.
+ * `?blockIds=<id>` targets a block inside the doc.
+ */
+export const DOC_LINK_BASE = 'affine://doc';
+
+const docLinkMiddleware: TransformerMiddleware = ({ adapterConfigs }) => {
+  adapterConfigs.set('docLinkBaseUrl', DOC_LINK_BASE);
+};
 
 export type LocalDocImage = {
   blockId: string;
@@ -94,6 +108,7 @@ async function blockToMarkdown(store: Store, model: BlockModel) {
     return `![${props.caption ?? ''}](affine-image:${props.sourceId ?? ''})`;
   }
   const transformer = store.getTransformer([
+    docLinkMiddleware,
     titleMiddleware(store.workspace.meta.docMetas),
     embedSyncedDocMiddleware('content'),
   ]);
@@ -160,7 +175,10 @@ async function insertHtml(
   html: string,
   index: number
 ) {
-  const transformer = store.getTransformer([defaultImageProxyMiddleware]);
+  const transformer = store.getTransformer([
+    defaultImageProxyMiddleware,
+    docLinkMiddleware,
+  ]);
   const adapter = new HtmlAdapter(transformer, store.provider);
   const snapshot = await adapter.toSliceSnapshot({
     file: html,
@@ -191,15 +209,31 @@ async function insertAt(
 ) {
   if (!content.trim()) return 0;
   if (looksLikeHtml(content)) return insertHtml(store, note, content, index);
-  const models = await insertFromMarkdown(
-    undefined,
-    content,
-    store,
-    note.id,
-    index,
-    id
-  );
-  return models.length;
+  const transformer = store.getTransformer([
+    defaultImageProxyMiddleware,
+    docLinkMiddleware,
+  ]);
+  const adapter = new MarkdownAdapter(transformer, store.provider);
+  const snapshot = await adapter.toSliceSnapshot({
+    file: content,
+    assets: transformer.assetsManager,
+    workspaceId: store.workspace.id,
+    pageId: store.id,
+  });
+  const blocks = snapshot?.content.flatMap(block => block.children) ?? [];
+  let inserted = 0;
+  for (const block of blocks) {
+    // keep the id of an edited block when it stays a single block
+    if (blocks.length === 1 && id) block.id = id;
+    const model = await transformer.snapshotToBlock(
+      block,
+      store,
+      note.id,
+      index + inserted
+    );
+    if (model) inserted++;
+  }
+  return inserted;
 }
 
 /**

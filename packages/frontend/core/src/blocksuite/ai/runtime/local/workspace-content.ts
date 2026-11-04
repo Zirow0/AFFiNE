@@ -191,6 +191,49 @@ export function createLocalWorkspaceContent(
         };
       });
     },
+    async getDocLinks(docId) {
+      if (!docsService.list.doc$(docId).value) return null;
+      const live = (id: string) => {
+        const record = docsService.list.doc$(id).value;
+        return record && !record.trash$.value ? record : null;
+      };
+      const outgoing = await firstValueFrom(
+        docsSearchService.watchRefsFrom(docId).pipe(timeout(10_000))
+      ).catch(() => []);
+      const { buckets } = await docsSearchService.indexer
+        .aggregate(
+          'block',
+          { type: 'match', field: 'refDocId', match: docId },
+          'docId',
+          {
+            hits: {
+              fields: ['docId', 'markdownPreview'],
+              pagination: { limit: 1 },
+            },
+            pagination: { limit: 100 },
+            prefer: 'local',
+          }
+        )
+        .catch(() => ({ buckets: [] as any[] }));
+      return {
+        docId,
+        links: outgoing
+          .filter(ref => live(ref.docId))
+          .map(ref => ({ docId: ref.docId, title: ref.title || 'Untitled' })),
+        backlinks: buckets
+          .filter(bucket => bucket.key !== docId && live(bucket.key))
+          .map(bucket => {
+            const preview = bucket.hits.nodes[0]?.fields.markdownPreview;
+            return {
+              docId: bucket.key,
+              title: live(bucket.key)?.title$.value || 'Untitled',
+              excerpt:
+                (typeof preview === 'string' ? preview : preview?.[0]) ||
+                undefined,
+            };
+          }),
+      };
+    },
     async createDoc(title, markdown) {
       const record = docsService.createDoc({ title, primaryMode: 'page' });
       const inserted = await withDoc(record.id, doc =>

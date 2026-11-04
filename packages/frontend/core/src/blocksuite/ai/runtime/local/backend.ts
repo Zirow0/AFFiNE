@@ -58,6 +58,12 @@ export interface LocalWorkspaceContent {
     afterBlockId?: string
   ): Promise<{ inserted: number } | null>;
   renameDoc?(docId: string, title: string): Promise<boolean>;
+  /** docs this doc links to, and docs linking to it */
+  getDocLinks?(docId: string): Promise<{
+    docId: string;
+    links: { docId: string; title: string }[];
+    backlinks: { docId: string; title: string; excerpt?: string }[];
+  } | null>;
   listTags?(): Promise<
     { id: string; name: string; color: string; docCount: number }[]
   >;
@@ -368,6 +374,13 @@ const READ_TOOLS: LocalAiToolDefinition[] = [
   ),
 ];
 
+const LINKS_TOOL = fn(
+  'doc_links',
+  'List the documents a document links to and the documents that link to it (backlinks).',
+  { doc_id: { type: 'string', description: 'The document id' } },
+  ['doc_id']
+);
+
 const IMAGE_TOOL = fn(
   'doc_view_images',
   'Look at images stored in the workspace (for example images listed by doc_read). The images are shown to you right after this call.',
@@ -518,6 +531,7 @@ const DOC_EDITING_GUIDE = `# Working with documents
 - Document content you write must be Markdown (e.g. "# Heading", "- item", "- [ ] task"), never HTML.
 - To change a document use doc_update (full new body with markers kept), doc_append (add content), doc_create (new doc) or doc_update_meta (rename). Only edit when the user asked you to change or create something; otherwise answer in chat.
 - After editing, briefly tell the user what you changed.
+- Links to other documents look like [text](affine://doc/<doc id>) (add ?blockIds=<block id> to point at a block). Write links in exactly this form to link documents; find doc ids with doc_keyword_search. Use doc_links to see which documents link to each other.
 - Images appear as ![caption](affine-image:<blob id>); call doc_view_images with those blob ids to see them.
 - Tags and properties (status, dates, checkboxes, …) are not part of the body: read them with doc_properties / tag_list / tag_docs and change them with doc_set_tags / doc_set_property; create a missing property with property_create only when the user asks for it.`;
 
@@ -898,6 +912,7 @@ export class LocalCopilotBackend {
     const content = this.content;
     if (!content) return undefined;
     const tools = [...READ_TOOLS];
+    if (content.getDocLinks) tools.push(LINKS_TOOL);
     if (content.listTags) tools.push(...META_READ_TOOLS);
     if (model.supportsVision && content.getImage) tools.push(IMAGE_TOOL);
     if (content.editDoc) tools.push(...WRITE_TOOLS);
@@ -935,6 +950,10 @@ export class LocalCopilotBackend {
           const doc = await content.readDoc(docId);
           if (!doc) return notFound;
           return { ...doc, markdown: truncate(doc.markdown) };
+        }
+        case 'doc_links': {
+          if (!content.getDocLinks) throw new Error('Links are unavailable');
+          return (await content.getDocLinks(docId)) ?? notFound;
         }
         case 'tag_list': {
           if (!content.listTags) throw new Error('Tags are unavailable');

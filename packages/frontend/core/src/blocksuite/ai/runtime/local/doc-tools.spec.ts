@@ -177,3 +177,33 @@ describe('html fallback', () => {
     ]);
   });
 });
+
+describe('links between documents', () => {
+  test('writes and reads doc references as affine://doc links', async () => {
+    const store = await createPage('Intro');
+    // a second doc to link to, with a title known to the workspace meta
+    const target = store.workspace.createDoc('target-doc');
+    store.workspace.meta.setDocMeta('target-doc', { title: 'Budget 2026' });
+    void target;
+
+    await appendMarkdown(
+      store,
+      'See [the budget](affine://doc/target-doc) and [a block](affine://doc/target-doc?blockIds=b1).'
+    );
+    const paragraph = note(store).children.at(-1)!;
+    const deltas = (paragraph.props as { text: Text }).text.toDelta() as Array<{
+      insert: string;
+      attributes?: { reference?: { pageId: string; params?: any } };
+    }>;
+    const refs = deltas.filter(d => d.attributes?.reference);
+    expect(refs.map(r => r.attributes!.reference!.pageId)).toEqual([
+      'target-doc',
+      'target-doc',
+    ]);
+    expect(refs[1].attributes!.reference!.params?.blockIds).toEqual(['b1']);
+
+    const { markdown } = await exportTaggedMarkdown(store);
+    expect(markdown).toContain('[Budget 2026](affine://doc/target-doc)');
+    expect(markdown).toContain('affine://doc/target-doc?blockIds=b1');
+  });
+});
