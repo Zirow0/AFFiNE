@@ -595,7 +595,7 @@ const META_READ_TOOLS: LocalAiToolDefinition[] = [
   ),
   fn(
     'tag_docs',
-    'List the documents that have a tag (by tag name or id).',
+    'List the documents that have a given tag (by tag name or id). For the tags of one document use doc_properties.',
     { tag: { type: 'string', description: 'Tag name or id' } },
     ['tag']
   ),
@@ -607,7 +607,7 @@ const META_READ_TOOLS: LocalAiToolDefinition[] = [
   ),
   fn(
     'doc_properties',
-    'Read the properties of a document: tags, doc mode, template flag, page width, created/updated dates and all custom properties with their values.',
+    'Read the tags and properties of one document: tags, doc mode, template flag, page width, created/updated dates and all custom properties with their values.',
     { doc_id: { type: 'string', description: 'The document id' } },
     ['doc_id']
   ),
@@ -1152,6 +1152,10 @@ export class LocalCopilotBackend {
         }
         case 'tag_docs': {
           if (!content.docsByTag) throw new Error('Tags are unavailable');
+          // small models call this for "which tags does this doc have"
+          if (!args.tag && args.doc_id && content.getDocProperties) {
+            return (await content.getDocProperties(docId)) ?? notFound;
+          }
           const found = await content.docsByTag(String(args.tag ?? ''));
           return (
             found ?? {

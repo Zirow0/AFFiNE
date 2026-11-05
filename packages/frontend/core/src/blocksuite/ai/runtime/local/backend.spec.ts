@@ -290,6 +290,63 @@ describe('local (server-less) AI backend', () => {
     expect(system).toContain('- [ ] Milk');
   });
 
+  test('tag_docs called with a document answers with its tags', async () => {
+    electron.state.scripts.push(
+      [
+        {
+          type: 'tool-calls',
+          toolCalls: [
+            {
+              id: 't1',
+              type: 'function',
+              function: {
+                name: 'tag_docs',
+                arguments: '{"doc_id":"Shopping list"}',
+              },
+            },
+          ],
+        },
+        { type: 'done' },
+      ],
+      [{ type: 'text-delta', textDelta: 'Home.' }, { type: 'done' }]
+    );
+    const props = {
+      docId: 'doc1',
+      title: 'Shopping list',
+      properties: [
+        {
+          id: 'tags',
+          name: 'Tags',
+          type: 'tags',
+          editable: true,
+          value: ['Home'],
+        },
+      ],
+    };
+    const service = createLocalAIRequestService(WORKSPACE, {
+      resolveDocId: id => (id === 'Shopping list' ? 'doc1' : id),
+      searchDocs: async () => [],
+      readDoc: async () => null,
+      docsByTag: async () => null,
+      getDocProperties: async id => (id === 'doc1' ? props : null),
+    });
+    const sessionId = await service.createSession({
+      workspaceId: WORKSPACE,
+      promptName: 'Chat With AFFiNE AI',
+    } as BlockSuitePresets.AICreateSessionOptions);
+    const objects = (
+      await collect(
+        (await service.executeAction('chat', {
+          workspaceId: WORKSPACE,
+          sessionId,
+          input: 'Tags of Shopping list?',
+          stream: true,
+        } as any)) as AsyncIterable<string>
+      )
+    ).map(chunk => JSON.parse(chunk));
+    expect(objects.find(o => o.type === 'tool-result').result).toEqual(props);
+  });
+
   test('uses its own prompt for text actions', async () => {
     const service = createLocalAIRequestService(WORKSPACE);
     const chunks = await collect(
