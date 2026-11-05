@@ -29,6 +29,11 @@ import { mayBeTextToolCall, parseTextToolCalls } from './text-tool-calls';
  * Implemented by the app shell (see `workspace-side-effects.tsx`).
  */
 export interface LocalWorkspaceContent {
+  /**
+   * Map what the model passed as a doc id to a real one: the id itself, or
+   * the id of the only document with that title.
+   */
+  resolveDocId?(idOrTitle: string): string;
   searchDocs(
     query: string,
     limit?: number
@@ -1099,7 +1104,8 @@ export class LocalCopilotBackend {
     try {
       const content = this.content;
       if (!content) throw new Error('Workspace access is unavailable');
-      const docId = String(args.doc_id ?? '');
+      const rawDocId = String(args.doc_id ?? '').trim();
+      const docId = content.resolveDocId?.(rawDocId) ?? rawDocId;
       switch (name) {
         case 'doc_keyword_search': {
           const hits = await content.searchDocs(String(args.query ?? ''), 10);

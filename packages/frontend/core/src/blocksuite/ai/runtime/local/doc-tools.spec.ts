@@ -14,6 +14,7 @@ import {
   applyTaggedMarkdown,
   exportTaggedMarkdown,
   parseTaggedMarkdown,
+  resolveDocId,
   resolveDocLinks,
 } from './doc-tools';
 
@@ -245,6 +246,13 @@ describe('link target resolution', () => {
     ).toBe(
       '[Getting Started](affine://doc/abc123) [see budget](affine://doc/def456)'
     );
+  });
+
+  test('doc ids given as titles are resolved', () => {
+    expect(resolveDocId('abc123', docs)).toBe('abc123');
+    expect(resolveDocId('Getting Started', docs)).toBe('abc123');
+    expect(resolveDocId("'getting-started'", docs)).toBe('abc123');
+    expect(resolveDocId('Unknown', docs)).toBe('Unknown');
   });
 
   test('refuses links nothing matches', () => {

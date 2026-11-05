@@ -18,6 +18,7 @@ import {
   applyTaggedMarkdown,
   exportTaggedMarkdown,
   insertionPoint,
+  resolveDocId,
   resolveDocLinks,
 } from './doc-tools';
 
@@ -169,16 +170,16 @@ export function createLocalWorkspaceContent(
     }
   };
 
+  const liveDocs = () =>
+    docsService.list.docs$.value
+      .filter(record => !record.trash$.value)
+      .map(record => ({ id: record.id, title: record.title$.value }));
   const resolveLinks = (markdown: string) =>
-    resolveDocLinks(
-      markdown,
-      docsService.list.docs$.value
-        .filter(record => !record.trash$.value)
-        .map(record => ({ id: record.id, title: record.title$.value }))
-    );
+    resolveDocLinks(markdown, liveDocs());
 
   return {
     ...meta,
+    resolveDocId: idOrTitle => resolveDocId(idOrTitle, liveDocs()),
     async searchDocs(query, limit = 10) {
       const wanted = query.trim().toLowerCase();
       if (!wanted) return [];

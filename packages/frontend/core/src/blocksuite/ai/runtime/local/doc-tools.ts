@@ -151,16 +151,34 @@ export class DocLinkError extends Error {
  *
  * @param docs the live (non-trashed) documents of the workspace
  */
+/** Compare titles loosely: case, dashes, underscores and extra spaces. */
+export function titleKey(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[-_+]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * The id of the document `idOrTitle` names: the id itself when it exists,
+ * else the only document with that title (models often pass a title).
+ */
+export function resolveDocId(
+  idOrTitle: string,
+  docs: { id: string; title: string }[]
+) {
+  if (docs.some(doc => doc.id === idOrTitle)) return idOrTitle;
+  const key = titleKey(idOrTitle.replace(/^["'«“]|["'»”]$/g, ''));
+  if (!key) return idOrTitle;
+  const matches = docs.filter(doc => titleKey(doc.title) === key);
+  return matches.length === 1 ? matches[0].id : idOrTitle;
+}
+
 export function resolveDocLinks(
   markdown: string,
   docs: { id: string; title: string }[]
 ) {
-  const titleKey = (value: string) =>
-    value
-      .toLowerCase()
-      .replace(/[-_+]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
   const ids = new Set(docs.map(doc => doc.id));
   const byTitle = (value: string) => {
     const key = titleKey(value);
