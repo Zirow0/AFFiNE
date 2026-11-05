@@ -238,6 +238,58 @@ describe('local (server-less) AI backend', () => {
     ).toEqual(['doc_keyword_search', 'doc_read']);
   });
 
+  test('shows tags and properties of the open document', async () => {
+    const service = createLocalAIRequestService(WORKSPACE, {
+      searchDocs: async () => [],
+      readDoc: async docId => ({
+        docId,
+        title: 'Shopping list',
+        markdown: '- [ ] Milk',
+        images: [],
+      }),
+      getDocProperties: async docId => ({
+        docId,
+        title: 'Shopping list',
+        properties: [
+          {
+            id: 'tags',
+            name: 'Tags',
+            type: 'tags',
+            editable: true,
+            value: ['Home', 'Food'],
+          },
+          {
+            id: 'p1',
+            name: 'Bought',
+            type: 'checkbox',
+            editable: true,
+            value: 'false',
+          },
+          { id: 'p2', name: 'Due', type: 'date', editable: true, value: null },
+        ],
+      }),
+    });
+    const sessionId = await service.createSession({
+      workspaceId: WORKSPACE,
+      docId: 'doc1',
+      promptName: 'Chat With AFFiNE AI',
+    } as BlockSuitePresets.AICreateSessionOptions);
+    await collect(
+      (await service.executeAction('chat', {
+        workspaceId: WORKSPACE,
+        docId: 'doc1',
+        sessionId,
+        input: 'Which tags does it have?',
+        stream: true,
+      } as any)) as AsyncIterable<string>
+    );
+    const system = electron.state.requests[0].messages[0].content as string;
+    expect(system).toContain('- Tags: Home, Food');
+    expect(system).toContain('- Bought: false');
+    expect(system).not.toContain('Due');
+    expect(system).toContain('- [ ] Milk');
+  });
+
   test('uses its own prompt for text actions', async () => {
     const service = createLocalAIRequestService(WORKSPACE);
     const chunks = await collect(

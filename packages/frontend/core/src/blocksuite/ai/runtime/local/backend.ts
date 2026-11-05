@@ -382,7 +382,7 @@ const READ_TOOLS: LocalAiToolDefinition[] = [
   ),
   fn(
     'doc_read',
-    'Read a document of the current workspace as block-tagged Markdown (each top-level block is preceded by <!-- block_id=... flavour=... -->). Also lists the images it contains.',
+    'Read a document of the current workspace as block-tagged Markdown (each top-level block is preceded by <!-- block_id=... flavour=... -->). Also returns its tags and filled-in properties and lists the images it contains.',
     { doc_id: { type: 'string', description: 'The document id' } },
     ['doc_id']
   ),
@@ -672,7 +672,7 @@ const DOC_EDITING_GUIDE = `# Working with documents
 - Toggle (collapsible) lists are list items starting with "▸ ", with the hidden content on the next lines indented by two spaces (not quoted), e.g. "- ▸ Details\n  - hidden item". Callouts are quotes starting with an emoji marker, e.g. "> [!💡] Remember this" (or [!NOTE], [!TIP], [!WARNING]).
 - Databases (tables with typed columns, also kanban) are separate blocks: find them with database_list, read rows with database_read and change them with the database_* tools — never rewrite a database through doc_update.
 - Images appear as ![caption](affine-image:<blob id>); call doc_view_images with those blob ids to see them.
-- Tags and properties (status, dates, checkboxes, …) are not part of the body: read them with doc_properties / tag_list / tag_docs and change them with doc_set_tags / doc_set_property; create a missing property with property_create only when the user asks for it.`;
+- Tags and properties (status, dates, checkboxes, …) are not part of the body: documents in the context and doc_read results list them; use doc_properties for every property incl. empty ones, tag_list / tag_docs for tags across the workspace, and change them with doc_set_tags / doc_set_property; create a missing property with property_create only when the user asks for it.`;
 
 type GqlResult = Record<string, unknown>;
 
@@ -1112,7 +1112,12 @@ export class LocalCopilotBackend {
         case 'doc_read': {
           const doc = await content.readDoc(docId);
           if (!doc) return notFound;
-          return { ...doc, markdown: truncate(doc.markdown) };
+          const meta = await this.docMeta(docId);
+          return {
+            ...doc,
+            ...(meta ? { properties: meta } : {}),
+            markdown: truncate(doc.markdown),
+          };
         }
         case 'database_list':
         case 'database_read':
@@ -1262,6 +1267,25 @@ export class LocalCopilotBackend {
     }
   }
 
+  /**
+   * Tags and filled-in properties of a document as `name: value` pairs, so
+   * the model sees them next to the content without an extra tool call.
+   */
+  private async docMeta(docId: string) {
+    const info = await this.content
+      ?.getDocProperties?.(docId)
+      .catch(() => null);
+    if (!info) return null;
+    const meta: Record<string, string> = {};
+    for (const property of info.properties) {
+      const value = Array.isArray(property.value)
+        ? property.value.join(', ')
+        : (property.value ?? '');
+      if (value !== '') meta[property.name] = value;
+    }
+    return meta;
+  }
+
   private async buildChatMessages(
     session: LocalChatSession,
     model: ResolvedLocalModel
@@ -1304,8 +1328,18 @@ export class LocalCopilotBackend {
         if (!doc) continue;
         const body = truncate(doc.markdown, budget);
         budget -= body.length;
+        const meta = await this.docMeta(docId);
+        const metaLines = meta
+          ? Object.entries(meta)
+              .map(([name, value]) => `- ${name}: ${value}`)
+              .join('\n')
+          : '';
         context.push(
-          `## Document "${doc.title || 'Untitled'}" (id: ${doc.docId}${docId === currentDocId ? ', currently open' : ''})\n${body}`
+          `## Document "${doc.title || 'Untitled'}" (id: ${doc.docId}${docId === currentDocId ? ', currently open' : ''})\n` +
+            (meta
+              ? `Tags and properties (change them with doc_set_tags / doc_set_property):\n${metaLines || '- none'}\n\nContent:\n`
+              : '') +
+            body
         );
       }
     }
