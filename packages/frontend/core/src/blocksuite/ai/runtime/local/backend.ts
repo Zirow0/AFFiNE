@@ -668,6 +668,21 @@ export function markdownArg(value: unknown) {
   return text.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
 }
 
+/**
+ * Put a one-line `Name: value` summary of the filled-in properties first, so
+ * small models do not have to dig through the full property list.
+ */
+function withPropertySummary<
+  T extends { properties: { name: string; value: string | string[] | null }[] },
+>(info: T) {
+  const summary = info.properties
+    .map(p => [p.name, Array.isArray(p.value) ? p.value.join(', ') : p.value])
+    .filter(([, value]) => value)
+    .map(([name, value]) => `${name}: ${value}`)
+    .join('; ');
+  return { summary: summary || 'no tags or properties set', ...info };
+}
+
 const DOC_EDITING_GUIDE = `# Working with documents
 - Documents are AFFiNE pages. doc_read and the context show them as block-tagged Markdown; the markers are only addresses for editing — never show them to the user.
 - Document content you write must be Markdown (e.g. "# Heading", "- item", "- [ ] task"), never HTML.
@@ -1154,7 +1169,8 @@ export class LocalCopilotBackend {
           if (!content.docsByTag) throw new Error('Tags are unavailable');
           // small models call this for "which tags does this doc have"
           if (!args.tag && args.doc_id && content.getDocProperties) {
-            return (await content.getDocProperties(docId)) ?? notFound;
+            const info = await content.getDocProperties(docId);
+            return info ? withPropertySummary(info) : notFound;
           }
           const found = await content.docsByTag(String(args.tag ?? ''));
           return (
@@ -1175,7 +1191,8 @@ export class LocalCopilotBackend {
           if (!content.getDocProperties) {
             throw new Error('Properties are unavailable');
           }
-          return (await content.getDocProperties(docId)) ?? notFound;
+          const info = await content.getDocProperties(docId);
+          return info ? withPropertySummary(info) : notFound;
         }
         case 'doc_set_tags': {
           if (!content.setDocTags) throw new Error('Tags are unavailable');

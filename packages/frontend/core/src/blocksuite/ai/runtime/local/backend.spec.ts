@@ -344,7 +344,10 @@ describe('local (server-less) AI backend', () => {
         } as any)) as AsyncIterable<string>
       )
     ).map(chunk => JSON.parse(chunk));
-    expect(objects.find(o => o.type === 'tool-result').result).toEqual(props);
+    expect(objects.find(o => o.type === 'tool-result').result).toEqual({
+      summary: 'Tags: Home',
+      ...props,
+    });
   });
 
   test('uses its own prompt for text actions', async () => {
