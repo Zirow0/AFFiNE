@@ -25,12 +25,6 @@ import { createNode } from './node-builder';
 
 const SQLITE_INDEXER_VERSION_OFFSET = 1;
 const NATIVE_INDEXER_MAX_LIMIT = 0xffffffff;
-/**
- * The native full-text index refuses searches whose window (offset + limit)
- * is larger than this ("search window exceeds 10000"). Aggregations have no
- * such limit.
- */
-export const NATIVE_SEARCH_WINDOW = 10_000;
 
 export class SqliteIndexerStorage extends IndexerStorageBase {
   static readonly identifier = 'SqliteIndexerStorage';
@@ -247,23 +241,13 @@ function toNativeOptions(
 ): NativeIndexSearchOptions {
   const highlights = options?.highlights?.map(item => String(item.field)) ?? [];
   return {
-    limit: toNativeSearchLimit(limit, offset),
+    limit: toNativeLimit(limit),
     offset,
     fields: [
       ...new Set([...(options?.fields?.map(String) ?? []), ...highlights]),
     ],
     highlights,
   };
-}
-
-/**
- * Clamp a search limit (often `Infinity`, meaning "everything") to the window
- * the native index accepts, so such searches return the first results instead
- * of failing.
- */
-export function toNativeSearchLimit(limit: number, offset: number) {
-  const window = Math.max(0, NATIVE_SEARCH_WINDOW - offset);
-  return Math.min(limit, window);
 }
 
 function toNativeLimit(limit: number) {
