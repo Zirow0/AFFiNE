@@ -5,7 +5,10 @@ use sqlx::Row;
 
 use super::{
   DocIndexedClock, NBSTORE_INDEXER_VERSION, NativeIndexAggregateResult, NativeIndexBucket, NativeIndexDocument,
-  NativeIndexQuery, NativeIndexSearchOptions, NativeIndexSearchResult, SqliteDocStorage, error::Result, string_values,
+  NativeIndexQuery, NativeIndexSearchOptions, NativeIndexSearchResult, SqliteDocStorage,
+  error::Result,
+  string_values,
+  table::{clamp_search_window, search_unbounded},
 };
 
 impl SqliteDocStorage {
@@ -138,11 +141,8 @@ impl SqliteDocStorage {
     self.indexes.ensure_ready()?;
     let table = self.indexes.table(table)?;
     let query = table.compile_query(query)?;
-    let result = table
-      .index
-      .read()
-      .await
-      .search(&query, table.compile_options(options)?)?;
+    let options = table.compile_options(options)?;
+    let result = search_unbounded(&*table.index.read().await, &query, options)?;
     Ok(NativeIndexSearchResult {
       total: result.total as u32,
       hits: result.hits.into_iter().map(|hit| table.hit(hit)).collect(),
@@ -167,7 +167,9 @@ impl SqliteDocStorage {
         field: table.field(field)?,
         limit: limit as usize,
         offset: offset as usize,
-        top_hits: hits.map(|options| table.compile_options(options)).transpose()?,
+        top_hits: hits
+          .map(|options| table.compile_options(options).map(clamp_search_window))
+          .transpose()?,
       },
     )?;
     Ok(NativeIndexAggregateResult {

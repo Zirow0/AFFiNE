@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use memory_indexer::{
   FieldId, FieldOptions, FieldType, Highlight, MemoryIndex, PositionEncoding, Query, Schema, SearchMode, SearchOptions,
-  TextOptions, Value,
+  SearchResult, TextOptions, Value,
 };
 use tokio::sync::RwLock;
 
@@ -11,6 +11,60 @@ use super::{
   NativeIndexSearchOptions, NativeIndexSpan,
   error::{Error, Result},
 };
+
+/// memory-indexer rejects searches whose window (`offset + limit`) is larger
+/// than this ("search window exceeds 10000").
+pub(super) const MAX_SEARCH_WINDOW: usize = 10_000;
+
+/// Search without memory-indexer's window limit.
+///
+/// The JS side asks for "all results" with a limit of `u32::MAX`. Windows that
+/// fit are searched directly; larger ones are read in pages of
+/// [`MAX_SEARCH_WINDOW`] with search-after, which keeps the same order (score,
+/// then document id) as a single search would.
+pub(super) fn search_unbounded(index: &MemoryIndex, query: &Query, options: SearchOptions) -> Result<SearchResult> {
+  if options.offset.saturating_add(options.limit) <= MAX_SEARCH_WINDOW {
+    return Ok(index.search(query, options)?);
+  }
+
+  let mut to_skip = options.offset;
+  let mut remaining = options.limit;
+  let mut hits = Vec::new();
+  let mut after = None;
+  loop {
+    let page = index.search(
+      query,
+      SearchOptions {
+        limit: MAX_SEARCH_WINDOW,
+        offset: 0,
+        after: after.take(),
+        ..options.clone()
+      },
+    )?;
+    let page_len = page.hits.len();
+    after = page.hits.last().map(|hit| hit.sort_values.clone());
+    for hit in page.hits {
+      if to_skip > 0 {
+        to_skip -= 1;
+      } else if remaining > 0 {
+        remaining -= 1;
+        hits.push(hit);
+      }
+    }
+    if page_len < MAX_SEARCH_WINDOW || remaining == 0 || after.is_none() {
+      return Ok(SearchResult {
+        total: page.total,
+        hits,
+      });
+    }
+  }
+}
+
+/// Top hits of an aggregation cannot be paged; keep them inside the window.
+pub(super) fn clamp_search_window(mut options: SearchOptions) -> SearchOptions {
+  options.limit = options.limit.min(MAX_SEARCH_WINDOW.saturating_sub(options.offset));
+  options
+}
 
 pub(crate) struct TableIndex {
   pub(super) schema: Schema,
