@@ -316,3 +316,62 @@ async fn failed_atomic_commit_keeps_index_dirty_and_clock_unadvanced() {
   storage.close().await;
   cleanup(&db_path).await;
 }
+
+#[tokio::test]
+async fn search_returns_all_results_beyond_the_native_window() {
+  let db_path = temp_workspace_dir().join("storage.db");
+  let storage = init_db(&db_path).await;
+  const DOCS: usize = 10_050;
+  for i in 0..DOCS {
+    let id = format!("doc-{i:05}");
+    storage
+      .index_upsert("doc", document(&id, &[("docId", &[id.as_str()]), ("title", &["note"])]))
+      .await
+      .unwrap();
+  }
+
+  // the JS side maps `limit: Infinity` to u32::MAX
+  let mut everything = options(&["docId"], &[]);
+  everything.limit = u32::MAX;
+  let all = storage
+    .index_search("doc", query("all", None, None), everything)
+    .await
+    .unwrap();
+  assert_eq!(all.total as usize, DOCS);
+  assert_eq!(all.hits.len(), DOCS);
+  let unique: std::collections::HashSet<_> = all.hits.iter().map(|hit| hit.id.as_str()).collect();
+  assert_eq!(unique.len(), DOCS);
+
+  // a window that crosses the limit returns the same slice as the full list
+  let mut crossing = options(&[], &[]);
+  crossing.offset = 9_990;
+  crossing.limit = 20;
+  let slice = storage
+    .index_search("doc", query("all", None, None), crossing)
+    .await
+    .unwrap();
+  let expected: Vec<_> = all.hits[9_990..10_010].iter().map(|hit| hit.id.clone()).collect();
+  assert_eq!(
+    slice.hits.iter().map(|hit| hit.id.clone()).collect::<Vec<_>>(),
+    expected
+  );
+
+  // windows inside the limit behave as before
+  let first = storage
+    .index_search("doc", query("all", None, None), options(&[], &[]))
+    .await
+    .unwrap();
+  assert_eq!(first.hits.len(), 10);
+
+  // aggregation top hits are kept inside the window instead of failing
+  let mut hits = options(&["docId"], &[]);
+  hits.limit = u32::MAX;
+  let aggregate = storage
+    .index_aggregate("doc", query("all", None, None), "docId", 5, 0, Some(hits))
+    .await
+    .unwrap();
+  assert_eq!(aggregate.buckets.len(), 5);
+
+  storage.close().await;
+  cleanup(&db_path).await;
+}
