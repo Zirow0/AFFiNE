@@ -350,6 +350,45 @@ describe('local (server-less) AI backend', () => {
     });
   });
 
+  test('sends tools without parameters back with {} arguments', async () => {
+    electron.state.scripts.push(
+      [
+        {
+          type: 'tool-calls',
+          toolCalls: [
+            {
+              id: 'e1',
+              type: 'function',
+              function: { name: 'doc_keyword_search', arguments: '' },
+            },
+          ],
+        },
+        { type: 'done' },
+      ],
+      [{ type: 'text-delta', textDelta: 'ok' }, { type: 'done' }]
+    );
+    const service = createLocalAIRequestService(WORKSPACE, {
+      searchDocs: async () => [],
+      readDoc: async () => null,
+    });
+    const sessionId = await service.createSession({
+      workspaceId: WORKSPACE,
+      promptName: 'Chat With AFFiNE AI',
+    } as BlockSuitePresets.AICreateSessionOptions);
+    await collect(
+      (await service.executeAction('chat', {
+        workspaceId: WORKSPACE,
+        sessionId,
+        input: 'Q',
+        stream: true,
+      } as any)) as AsyncIterable<string>
+    );
+    const assistant = electron.state.requests[1].messages.find(
+      (m: any) => m.role === 'assistant'
+    );
+    expect(assistant.tool_calls[0].function.arguments).toBe('{}');
+  });
+
   test('uses its own prompt for text actions', async () => {
     const service = createLocalAIRequestService(WORKSPACE);
     const chunks = await collect(

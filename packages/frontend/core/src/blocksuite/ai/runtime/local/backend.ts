@@ -683,6 +683,18 @@ function withPropertySummary<
   return { summary: summary || 'no tags or properties set', ...info };
 }
 
+/** Tool call arguments as an object; empty or broken JSON becomes `{}`. */
+export function toolArgs(raw: string | undefined): Record<string, any> {
+  try {
+    const parsed = JSON.parse(raw || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 const DOC_EDITING_GUIDE = `# Working with documents
 - Documents are AFFiNE pages. doc_read and the context show them as block-tagged Markdown; the markers are only addresses for editing — never show them to the user.
 - Document content you write must be Markdown (e.g. "# Heading", "- item", "- [ ] task"), never HTML.
@@ -1018,6 +1030,17 @@ export class LocalCopilotBackend {
         if (!toolCalls.length) flush();
         if (signal.aborted || !toolCalls.length) break;
 
+        // Tools without parameters stream no arguments at all. OpenAI-style
+        // APIs that convert calls for Anthropic models reject the empty
+        // string ("tool_use.input: Input should be an object"), so always
+        // send the arguments back as a JSON object.
+        toolCalls = toolCalls.map(call => ({
+          ...call,
+          function: {
+            ...call.function,
+            arguments: JSON.stringify(toolArgs(call.function.arguments)),
+          },
+        }));
         messages.push({
           role: 'assistant',
           content: text || null,
@@ -1025,12 +1048,7 @@ export class LocalCopilotBackend {
         });
         const viewedImages: string[] = [];
         for (const call of toolCalls) {
-          let args: Record<string, any> = {};
-          try {
-            args = JSON.parse(call.function.arguments || '{}');
-          } catch {
-            args = {};
-          }
+          const args = toolArgs(call.function.arguments);
           emit({
             type: 'tool-call',
             toolCallId: call.id,
