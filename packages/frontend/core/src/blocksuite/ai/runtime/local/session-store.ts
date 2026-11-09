@@ -2,6 +2,7 @@ import { apis } from '@affine/electron-api';
 import { nanoid } from 'nanoid';
 
 import type { StreamObject } from '../../components/ai-chat-messages/type';
+import { mergeStreamObjects } from '../../utils/stream-objects';
 
 /**
  * On-device storage of AI chat sessions for the server-less AI backend.
@@ -76,7 +77,21 @@ export class LocalSessionStore {
           | StoredData
           | null
           | undefined;
-        this.sessions = data?.version === 1 ? data.sessions : [];
+        this.sessions = (data?.version === 1 ? data.sessions : []).map(
+          session => ({
+            ...session,
+            // older versions stored every streamed chunk separately, which the
+            // chat history renders as one paragraph per chunk
+            messages: session.messages.map(message =>
+              message.streamObjects
+                ? {
+                    ...message,
+                    streamObjects: mergeStreamObjects(message.streamObjects),
+                  }
+                : message
+            ),
+          })
+        );
         return this.sessions;
       })();
     }

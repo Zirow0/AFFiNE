@@ -389,6 +389,69 @@ describe('local (server-less) AI backend', () => {
     expect(assistant.tool_calls[0].function.arguments).toBe('{}');
   });
 
+  test('stores an answer as merged stream objects', async () => {
+    electron.state.scripts.push([
+      { type: 'text-delta', textDelta: 'Hel' },
+      { type: 'text-delta', textDelta: 'lo, ' },
+      { type: 'text-delta', textDelta: 'world' },
+      { type: 'done' },
+    ]);
+    const service = createLocalAIRequestService(WORKSPACE);
+    const sessionId = await service.createSession({
+      workspaceId: WORKSPACE,
+      promptName: 'Chat With AFFiNE AI',
+    } as BlockSuitePresets.AICreateSessionOptions);
+    await collect(
+      (await service.executeAction('chat', {
+        workspaceId: WORKSPACE,
+        sessionId,
+        input: 'Hi',
+        stream: true,
+      } as any)) as AsyncIterable<string>
+    );
+    const saved = (electron.state.files.get(WORKSPACE) as any).sessions[0];
+    expect(saved.messages[1].streamObjects).toEqual([
+      { type: 'text-delta', textDelta: 'Hello, world' },
+    ]);
+  });
+
+  test('merges chunks of chats saved by older versions', async () => {
+    electron.state.files.set(WORKSPACE, {
+      version: 1,
+      sessions: [
+        {
+          sessionId: 'old',
+          workspaceId: WORKSPACE,
+          docId: null,
+          parentSessionId: null,
+          promptName: 'Chat With AFFiNE AI',
+          pinned: false,
+          title: null,
+          createdAt: '2026-11-01T00:00:00.000Z',
+          updatedAt: '2026-11-01T00:00:00.000Z',
+          messages: [
+            {
+              id: 'm1',
+              role: 'assistant',
+              content: 'ab',
+              attachments: [],
+              streamObjects: [
+                { type: 'text-delta', textDelta: 'a' },
+                { type: 'text-delta', textDelta: 'b' },
+              ],
+              scopeSnapshot: null,
+              createdAt: '2026-11-01T00:00:00.000Z',
+            },
+          ],
+        },
+      ],
+    });
+    const session = await LocalSessionStore.for(WORKSPACE).get('old');
+    expect(session?.messages[0].streamObjects).toEqual([
+      { type: 'text-delta', textDelta: 'ab' },
+    ]);
+  });
+
   test('uses its own prompt for text actions', async () => {
     const service = createLocalAIRequestService(WORKSPACE);
     const chunks = await collect(

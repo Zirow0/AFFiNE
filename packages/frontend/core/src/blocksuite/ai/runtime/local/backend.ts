@@ -9,6 +9,7 @@ import { apis, events } from '@affine/electron-api';
 import type { GraphQLQuery, QueryOptions } from '@affine/graphql';
 
 import type { StreamObject } from '../../components/ai-chat-messages/type';
+import { mergeStreamObjects } from '../../utils/stream-objects';
 import { chatSystemPrompt, getLocalPrompt } from './prompts';
 import {
   LocalAiNotConfiguredError,
@@ -1099,7 +1100,8 @@ export class LocalCopilotBackend {
             .join(''),
           attachments: [],
           params: null,
-          streamObjects: objects,
+          // the chat history expects merged objects, as the server stores them
+          streamObjects: mergeStreamObjects(objects),
         });
       }
     }
